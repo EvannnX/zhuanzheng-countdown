@@ -1,37 +1,39 @@
 import {
+  BOARD_DEPTH,
+  BOARD_HALF_WIDTH,
   BREAKFAST_ENERGY,
   BREAKFAST_SHARE,
-  COMMUTE_SECONDS,
-  FIRST_ARRIVAL_REWARD,
   HIT_ENERGY_COST,
   HIT_KPI_COST,
   HIT_PUSH_METERS,
   HIT_SAFE_SECONDS,
   HOLD_SECONDS,
-  LATE_PENALTY,
   MAX_ENERGY,
-  ON_TIME_REWARD,
-  PAJAMAS_PENALTY,
   PANCAKE_ENERGY,
   PLAYER_RADIUS,
-  TRAIN_SHARE,
-  UNWASHED_PENALTY,
+  RIDE_SECONDS,
+  SEAT_ENERGY,
 } from '../../shared/constants.ts';
-import { laneHit, trainAt } from '../../shared/hazards.ts';
-import type { ActKind, Prompt, TaskView } from '../../shared/protocol.ts';
-import { areaAt, deskSpawn, streetSpawn, subwaySpawn, warehouseSpawn } from '../../shared/world.ts';
+import { AVENUE, laneHit, trainAt, trainDoorsClose } from '../../shared/hazards.ts';
+import type { ActKind } from '../../shared/protocol.ts';
+import { PLATFORM_EDGE_Z, STATIONS, TRAIN_DOOR_XS, areaAt, plazaSpawn, streetSpawn, subwaySpawn, trainSpawn } from '../../shared/world.ts';
 import type { Station } from '../../shared/world.ts';
 import { activePlayers, award, patchPlayer, playerList, resetTask, say } from './state.ts';
 import type { GameState, Player } from './state.ts';
-import { fillTasks } from './tasks.ts';
+import { completeTower, tickLifts, tickLobby, towerOptions } from './tower.ts';
+import { cohortMates, option, teleport } from './travel.ts';
+import type { Option } from './travel.ts';
+import { completeVan, tickVans, vanOptions } from './van.ts';
 
-type Option = Omit<Prompt, 'key'>;
-const option = (act: ActKind, target: string, label: string, disabled = false): Option => ({ act, target, label, disabled });
+export { arrive } from './travel.ts';
+export { morningTasks } from './morning.ts';
 
 export const breakfastPortions = (players: number): number => Math.max(1, Math.ceil(players * BREAKFAST_SHARE));
-const trainCapacity = (s: GameState): number => Math.max(1, Math.ceil(playerList(s).length * TRAIN_SHARE));
+/** Seats belong to one train: a later train's riders find them free again. */
+export const seatTaken = (s: GameState, p: Player, seatId: string): boolean =>
+  p.cohort !== null && cohortMates(s, p.cohort).some((o) => o.stage === 'train' && o.seat === seatId);
 
-const washing = (s: GameState, stationId: string): boolean =>
+export const washing = (s: GameState, stationId: string): boolean =>
   activePlayers(s).some((o) => o.busy?.kind === 'hold' && o.busy.act === 'wash' && o.busy.target === stationId);
 
 /** What a station in the flat, on the street or on the platform offers. */
@@ -51,44 +53,50 @@ export function commuteOptions(s: GameState, p: Player, st: Station): Option[] {
       return p.pancake ? [] : [option('pancake', st.id, '买个煎饼果子（恢复精力）')];
     case 'subwayGate':
       return [option('enter', st.id, '进地铁站')];
-    case 'trainDoor': {
-      const train = trainAt(s.time);
-      if (!train.doorsOpen) return [option('board', st.id, '列车还没到站', true)];
-      const boarded = s.train.cycle === train.cycle ? s.train.boarded : 0;
-      return [boarded < trainCapacity(s) ? option('board', st.id, '挤上地铁！') : option('board', st.id, '挤不上去了，等下一班', true)];
-    }
+    case 'trainDoor':
+      return [trainAt(s.time).doorsOpen ? option('board', st.id, '挤上地铁！') : option('board', st.id, '列车还没到站', true)];
+    case 'seat':
+      if (p.stage !== 'train' || p.seat) return [];
+      return [seatTaken(s, p, st.id) ? option('seat', st.id, '有人坐了', true) : option('seat', st.id, `抢座位（精力 +${SEAT_ENERGY}）`)];
     default:
-      return [];
+      return [...towerOptions(s, p, st), ...vanOptions(s, p, st)];
   }
 }
 
-export const COMMUTE_INSTANT: readonly ActKind[] = ['exit', 'enter', 'board'];
+export const COMMUTE_INSTANT: readonly ActKind[] = ['exit', 'enter', 'board', 'seat', 'lift', 'drive', 'ride'];
 
-function teleport(s: GameState, pid: string, to: { x: number; z: number; yaw: number }): GameState {
+/** Step into the train that is standing at the platform. Everyone who boards it shares one car and one arrival. */
+function board(s: GameState, pid: string): GameState {
   const p = s.players[pid];
-  return patchPlayer(s, pid, { ...to, movedAt: s.time, spawnSeq: p.spawnSeq + 1 });
+  const train = trainAt(s.time);
+  if (!train.doorsOpen) return s;
+  const closes = trainDoorsClose(train.cycle);
+  const aboard = patchPlayer(teleport(s, pid, trainSpawn(p.deskIndex)), pid, {
+    stage: 'train',
+    cohort: `train:${train.cycle}`,
+    rideStartsAt: closes,
+    rideEndsAt: closes + RIDE_SECONDS,
+    seat: null,
+    busy: null,
+  });
+  return say(aboard, pid, '挤上来了！抢个座位回点精力，站稳扶好', 'good');
 }
 
-/** Clock in: move to the day's workplace, hand out tasks, settle the morning's bonuses and fines. */
-export function arrive(s: GameState, pid: string): GameState {
+/** How far in front of the seat back a rider's hips end up. */
+const SEAT_DEPTH = 0.12;
+const nearestSeat = (p: Player): Station | undefined =>
+  STATIONS.filter((st) => st.type === 'seat').sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))[0];
+
+function takeSeat(s: GameState, pid: string): GameState {
   const p = s.players[pid];
-  if (!p || p.stage === 'work') return s;
-  const spawn = s.site === 'office' ? deskSpawn(p.deskIndex) : warehouseSpawn(p.deskIndex);
-  const moved = patchPlayer(teleport(s, pid, spawn), pid, { stage: 'work', busy: null });
-  const isFirst = s.arrivals === 0;
-  const isLate = s.time > s.dayStartedAt + COMMUTE_SECONDS;
-  let next = fillTasks({ ...moved, arrivals: s.arrivals + 1 }, pid);
-  const where = s.site === 'office' ? '公司' : '外派仓库';
-  if (isLate) next = say(award(next, pid, -LATE_PENALTY), 'all', `${p.name} 迟到了，扣全勤 KPI -${LATE_PENALTY}`, 'bad');
-  else if (isFirst) next = say(award(next, pid, FIRST_ARRIVAL_REWARD), 'all', `${p.name} 第一个到${where}！KPI +${FIRST_ARRIVAL_REWARD}`, 'good');
-  else next = say(award(next, pid, ON_TIME_REWARD), pid, `准时打卡 KPI +${ON_TIME_REWARD}`, 'good');
-  if (!p.dressed) next = say(award(next, pid, -PAJAMAS_PENALTY), 'all', `${p.name} 穿着睡衣来上班 KPI -${PAJAMAS_PENALTY}`, 'bad');
-  if (!p.washed) next = say(award(next, pid, -UNWASHED_PENALTY), pid, `没洗漱，蓬头垢面 KPI -${UNWASHED_PENALTY}`, 'bad');
-  return next;
+  const st = nearestSeat(p);
+  if (!st || p.seat || seatTaken(s, p, st.id)) return s;
+  const sat = patchPlayer(teleport(s, pid, { x: st.ax, z: st.az + SEAT_DEPTH, yaw: 0 }), pid, { seat: st.id, energy: Math.min(MAX_ENERGY, p.energy + SEAT_ENERGY) });
+  return say(sat, pid, `坐下了，精力 +${SEAT_ENERGY}。到站自动起身`, 'good');
 }
 
 /** Effects of the morning actions. Returns null for acts this module does not own. */
-export function completeCommute(s: GameState, pid: string, act: ActKind): GameState | null {
+export function completeCommute(s: GameState, pid: string, act: ActKind, target = ''): GameState | null {
   const p = s.players[pid];
   switch (act) {
     case 'wash':
@@ -105,29 +113,52 @@ export function completeCommute(s: GameState, pid: string, act: ActKind): GameSt
     case 'exit':
       return say(patchPlayer(teleport(s, pid, streetSpawn(p.deskIndex)), pid, { stage: 'street' }), pid, '冲！过两条马路到地铁口，小心车（空格可以跳）', 'alert');
     case 'enter':
-      return say(patchPlayer(teleport(s, pid, subwaySpawn(p.deskIndex)), pid, { stage: 'subway' }), pid, '车门一开就按 E 挤上去，每班车位置有限', 'alert');
-    case 'board': {
-      const train = trainAt(s.time);
-      const boarded = s.train.cycle === train.cycle ? s.train.boarded : 0;
-      if (!train.doorsOpen || boarded >= trainCapacity(s)) return s;
-      return arrive({ ...s, train: { cycle: train.cycle, boarded: boarded + 1 } }, pid);
-    }
+      return say(patchPlayer(teleport(s, pid, subwaySpawn(p.deskIndex)), pid, { stage: 'subway' }), pid, '穿过闸机，车门一开就走进去', 'alert');
+    case 'board':
+      return board(s, pid);
+    case 'seat':
+      return takeSeat(s, pid);
     default:
-      return null;
+      return completeTower(s, pid, act, target) ?? completeVan(s, pid, act);
   }
 }
+
+/** Walking up to an open train door is enough to board: no key press needed. */
+function tickBoarding(s: GameState): GameState {
+  if (!trainAt(s.time).doorsOpen) return s;
+  return activePlayers(s).reduce((acc, p) => {
+    const atDoor = p.z >= PLATFORM_EDGE_Z - BOARD_DEPTH && TRAIN_DOOR_XS.some((x) => Math.abs(p.x - x) <= BOARD_HALF_WIDTH);
+    return p.stage === 'subway' && !p.busy && atDoor ? board(acc, p.id) : acc;
+  }, s);
+}
+
+/** A train's riders all step off together when it pulls in. */
+function tickTrains(s: GameState): GameState {
+  return playerList(s).reduce((acc, p) => {
+    if (p.stage !== 'train' || p.fired || acc.time < p.rideEndsAt) return acc;
+    const out = patchPlayer(teleport(acc, p.id, plazaSpawn(p.deskIndex)), p.id, { stage: 'plaza', seat: null, cohort: null });
+    return say(out, p.id, '到站了！等绿灯过马路，从旋转门进鲸跃大厦', 'alert');
+  }, s);
+}
+
+/** Everything that moves interns along without them pressing a key. */
+export const tickRides = (s: GameState): GameState => tickVans(tickLifts(tickLobby(tickTrains(tickBoarding(s)))));
+
+const KERB_METERS = PLAYER_RADIUS + 0.4;
 
 /** Anyone standing where a car or forklift is gets knocked flat. */
 export function tickHazards(s: GameState): GameState {
   return activePlayers(s).reduce((acc, p0) => {
     const p = acc.players[p0.id];
     const area = areaAt(p);
-    if ((area !== 'street' && area !== 'warehouse') || acc.time < p.safeUntil) return acc;
+    if ((area !== 'street' && area !== 'warehouse' && area !== 'plaza') || acc.time < p.safeUntil) return acc;
     const lane = laneHit(area, p.x, p.z, acc.time);
     if (!lane) return acc;
     // On the street you are thrown back to the kerb you came from; in the warehouse to the nearer side.
     const side = area === 'street' || p.z < lane.z ? -1 : 1;
-    const z = lane.z + side * (lane.width / 2 + HIT_PUSH_METERS + PLAYER_RADIUS);
+    const beside = lane.z + side * (lane.width / 2 + HIT_PUSH_METERS + PLAYER_RADIUS);
+    // The avenue is four lanes wide: you land back on the sidewalk you set out from.
+    const z = area !== 'plaza' ? beside : p.stage === 'depart' ? AVENUE.z1 + KERB_METERS : AVENUE.z0 - KERB_METERS;
     const dropped = resetTask(acc, p.carrying?.taskUid ?? null);
     const flat = patchPlayer(teleport(dropped, p.id, { x: p.x, z, yaw: p.yaw }), p.id, {
       carrying: null,
@@ -138,33 +169,4 @@ export function tickHazards(s: GameState): GameState {
     if (lane.kind === 'forklift') return say(award(flat, p.id, -HIT_KPI_COST), 'all', `${p.name} 被叉车铲飞了 KPI -${HIT_KPI_COST}`, 'bad');
     return say(flat, 'all', `${p.name} 被${lane.kind === 'bus' ? '公交车' : '车'}撞飞了！`, 'bad');
   }, s);
-}
-
-const chore = (uid: string, title: string, text: string, reward: string, target: string, done: boolean): TaskView => ({
-  uid,
-  title,
-  text,
-  kpi: 0,
-  reward,
-  target: done ? null : target,
-  done,
-});
-
-/** The to-do list shown before the intern has clocked in. */
-export function morningTasks(s: GameState, p: Player): TaskView[] {
-  if (p.stage === 'home') {
-    return [
-      chore('wash', '洗漱', '两个洗漱台，要排队', '不洗 -KPI', washing(s, 'wash0') ? 'wash1' : 'wash0', p.washed),
-      chore('dress', '换衣服', '去衣柜换下睡衣', '不换 -KPI', 'wardrobe', p.dressed),
-      chore('eat', '吃早餐', `冰箱里只剩 ${s.breakfastLeft} 份`, '+精力', 'fridge', p.ate),
-      chore('exit', '出门', '9:00 前到岗，否则算迟到', '必做', 'homedoor', false),
-    ];
-  }
-  if (p.stage === 'street') {
-    return [
-      chore('pancake', '煎饼果子', '两条马路中间的小摊', '+精力', 'pancake', p.pancake),
-      chore('gate', '去地铁口', '穿过两条马路，被撞会晕 2 秒', '必做', 'gate', false),
-    ];
-  }
-  return [chore('board', '挤上地铁', '车门打开时按 E，先到先上', '必做', 'traindoor1', false)];
 }

@@ -1,12 +1,24 @@
-import { MAX_WARNINGS, REPAIRS_NEEDED } from '../../shared/constants.ts';
-import type { EventKind, RankRow, Snapshot, Tone } from '../../shared/protocol.ts';
+import { MAX_WARNINGS, REPAIRS_NEEDED, promoteQuota } from '../../shared/constants.ts';
+import type { EventKind, RankRow, Snapshot, TaskView, Tone, Stage } from '../../shared/protocol.ts';
 import { SHOP } from '../../shared/tasks.ts';
 import { byId, h, setChildren } from './dom.ts';
 
 const TOAST_MS = 4500;
 const MAX_TOASTS = 5;
 const LOW_ENERGY = 20;
-const STAGE_TITLES = { home: '⏰ 起床！早高峰', street: '🚦 上班路上', subway: '🚇 挤地铁', work: '今日待办' } as const;
+const STAGE_TITLES: Record<Stage, string> = {
+  home: '⏰ 起床！早高峰',
+  street: '🚦 上班路上',
+  subway: '🚇 挤地铁',
+  train: '🚇 地铁上',
+  plaza: '🚥 公司楼下 · 过马路',
+  lobby: '🪪 一楼大堂',
+  lift: '🛗 电梯里',
+  dispatch: '📋 临时通知：今天外派',
+  depart: '🚐 下楼坐班车',
+  van: '🚐 外派班车',
+  work: '今日待办',
+};
 const MINOR_ACTS = ['phone', 'drop', 'eat', 'summon', 'banana'];
 
 const EVENT_TITLES: Record<EventKind, string> = {
@@ -33,7 +45,8 @@ export interface Hud {
 }
 
 function clockText(snap: Snapshot): string {
-  if (snap.phase === 'lobby') return '入职大厅 · 等待开工';
+  if (snap.phase === 'lobby') return '入职大厅 · 等待开局';
+  if (snap.phase === 'intro') return '入职培训';
   if (snap.phase === 'final') return '实习期结束';
   if (snap.phase === 'summary') return `第 ${snap.day} 天 · 下班结算`;
   const minutes = Math.floor(snap.clock);
@@ -59,9 +72,9 @@ function panelContent(snap: Snapshot, flags: HudFlags): HTMLElement[] | null {
     return [
       h('h2', '', '房间号'),
       h('div', 'code', snap.code),
-      h('p', '', '把房间号发给同事，最多 8 人。现在可以先到处逛逛熟悉地形'),
+      h('p', '', '把房间号发给同事，最多 8 人。人到齐再开局，开场动画大家一起看'),
       h('div', 'rows', ...snap.players.map((p) => h('div', `row${p.id === snap.you.id ? ' me' : ''}`, h('span', '', p.id === snap.hostId ? '👑' : '·'), h('span', '', p.name), h('span', '', ''), h('span', '', '')))),
-      h('p', '', isHost ? '按 Enter 键开工' : '等待房主开工…'),
+      h('p', '', isHost ? '人到齐后按 Enter 键开局' : '等待房主开局…'),
     ];
   }
   if (snap.phase === 'summary') {
@@ -84,6 +97,35 @@ function panelContent(snap: Snapshot, flags: HudFlags): HTMLElement[] | null {
   return null;
 }
 
+/** The always-on leaderboard: total KPI, today's gain, and the line only the top third stays above. */
+function liveRank(snap: Snapshot): HTMLElement[] {
+  const rows = snap.ranking;
+  const quota = promoteQuota(rows.length);
+  const line = h('div', 'cut', `转正线 · 只留前 ${quota} 名`);
+  const cells = rows.map((r, i) =>
+    h('div', `row${r.id === snap.you.id ? ' me' : ''}${r.fired ? ' out' : ''}`, h('span', '', r.fired ? '✖' : i === 0 && r.kpi > 0 ? '👑' : String(i + 1)), h('span', 'who', r.name), h('em', '', r.fired ? '劝退' : `+${r.today}`), h('b', '', String(r.kpi))),
+  );
+  return [h('h3', '', 'KPI 实时排行', h('small', '', '今日 / 总计')), ...cells.slice(0, quota), line, ...cells.slice(quota)];
+}
+
+/** One pip per stage of a job, filled as the stages get done. */
+function stepPips(t: TaskView): HTMLElement[] {
+  if (!t.steps || t.steps < 2) return [];
+  return [h('div', 'pips', ...Array.from({ length: t.steps }, (_, i) => h('i', i < (t.step ?? 0) ? 'on' : i === (t.step ?? 0) ? 'now' : '')))];
+}
+
+function goalRow(snap: Snapshot): HTMLElement {
+  const fill = h('i', 'race');
+  fill.style.width = `${Math.min(1, snap.dayGoal.best / snap.dayGoal.target) * 100}%`;
+  return h('div', 'okr', h('span', '', `下班条件：有人今天做满 ${snap.dayGoal.target} KPI · 领先 ${snap.dayGoal.leader} ${snap.dayGoal.best}`), h('div', 'bar', fill));
+}
+
+function okrRow(snap: Snapshot): HTMLElement {
+  const fill = h('i', snap.okr.done >= snap.okr.goal ? 'full' : '');
+  fill.style.width = `${Math.min(1, snap.okr.done / Math.max(1, snap.okr.goal)) * 100}%`;
+  return h('div', 'okr', h('span', '', `部门 OKR ${snap.okr.done}/${snap.okr.goal} · 大家一起完成`), h('div', 'bar', fill));
+}
+
 export function createHud(): Hud {
   const el = {
     hud: byId('hud'),
@@ -93,6 +135,7 @@ export function createHud(): Hud {
     warns: byId('warns'),
     perks: byId('perks'),
     tasks: byId('tasks'),
+    rank: byId('rank'),
     banner: byId('banner'),
     toasts: byId('toasts'),
     exposure: byId('exposure'),
@@ -121,16 +164,19 @@ export function createHud(): Hud {
 
       const playing = snap.phase === 'day';
       el.tasks.hidden = !playing;
+      el.rank.hidden = !playing;
+      if (playing) setChildren(el.rank, liveRank(snap));
       if (me?.fired) {
-        setChildren(el.tasks, [h('h3', '', '👻 外包幽灵'), h('div', 'task', h('span', '', '你已被劝退，拿不到 KPI 了。但你可以弄坏打印机，或者匿名举报把总监引到同事身边。'))]);
+        setChildren(el.tasks, [h('h3', '', '🕶️ 王总的监工'), h('div', 'task', h('span', '', '你被劝退后让王总返聘成了监工，拿不到 KPI 了。走到摸鱼的同事面前按 R 抓现行（给他一次警告），也可以弄坏打印机，或者按 Q 把王总叫过来。'))]);
       } else {
         setChildren(el.tasks, [
           h('h3', '', STAGE_TITLES[you.stage]),
-          ...you.tasks.map((t) => h('div', `task${t.done ? ' done' : ''}`, h('b', '', `${t.done ? '✔ ' : ''}${t.title}`, h('em', '', t.reward ?? `+${t.kpi}`)), h('span', '', t.text))),
+          ...(you.stage === 'work' && snap.okr.goal > 0 ? [goalRow(snap), okrRow(snap)] : []),
+          ...you.tasks.map((t) => h('div', `task${t.done ? ' done' : ''}`, h('b', '', `${t.done ? '✔ ' : ''}${t.title}`, h('em', '', t.reward ?? `+${t.kpi}`)), ...stepPips(t), h('span', '', t.text))),
         ]);
       }
 
-      const commuting = playing && you.stage !== 'work' && !me?.fired;
+      const commuting = playing && you.stage !== 'work' && !you.clockedIn && !me?.fired;
       el.banner.hidden = !snap.event && !commuting && !you.chased;
       el.banner.className = you.chased ? 'chase' : commuting && snap.workIn <= 0 ? 'late' : '';
       document.body.dataset.chased = you.chased ? '1' : '';

@@ -1,5 +1,6 @@
 import {
   COMMUTE_SECONDS,
+  DAY_KPI_TARGET,
   DAY_SECONDS,
   EXPOSE_SECONDS,
   GHOST_SPEED_FACTOR,
@@ -11,12 +12,14 @@ import { clamp } from '../../shared/geometry.ts';
 import type { ActKind, BusyView, PlayerStatus, PlayerView, Snapshot, TaskView, YouView } from '../../shared/protocol.ts';
 import { taskDef } from '../../shared/tasks.ts';
 import { stationById } from '../../shared/world.ts';
-import { morningTasks } from './commute.ts';
+import { morningTasks } from './morning.ts';
+import { canSee } from './travel.ts';
 import { getPrompts } from './prompts.ts';
-import { ownDeskId, playerList } from './state.ts';
+import { activePlayers, ownDeskId, playerList } from './state.ts';
 import type { GameState, Player } from './state.ts';
 import { ranking } from './step.ts';
-import { taskTarget, taskText, workAt } from './tasks.ts';
+import { currentStep, taskProgress, taskTarget, taskText, workOn } from './tasks.ts';
+import { shortOfHands } from './teamwork.ts';
 
 const SNEAKY: readonly ActKind[] = ['steal', 'blame', 'tamper', 'snack', 'jam'];
 
@@ -33,18 +36,29 @@ const HOLD_LABELS: Partial<Record<ActKind, string>> = {
   breakfast: '狼吞虎咽…',
   pancake: '等煎饼…',
   stun: '眼冒金星…',
+  assist: '一起抬…',
+  badge: '刷工牌…',
+  slip: '签收外派单…',
 };
+
+function dayGoal(s: GameState): Snapshot['dayGoal'] {
+  const best = activePlayers(s).reduce<Player | null>((top, p) => (!top || p.kpi - p.dayStartKpi > top.kpi - top.dayStartKpi ? p : top), null);
+  return { target: DAY_KPI_TARGET, best: best ? Math.max(0, best.kpi - best.dayStartKpi) : 0, leader: best?.name ?? '' };
+}
+
+const EATING: readonly ActKind[] = ['eat', 'breakfast', 'pancake'];
 
 function statusOf(p: Player): PlayerStatus {
   const busy = p.busy;
-  if (!busy) return 'idle';
+  if (!busy) return p.seat ? 'seated' : 'idle';
   if (busy.kind === 'slack') return busy.mode;
-  if (busy.kind === 'hold' && busy.act === 'eat') return 'eat';
+  if (busy.kind === 'hold' && EATING.includes(busy.act)) return 'eat';
+  if (busy.kind === 'hold' && (busy.act === 'wash' || busy.act === 'dress')) return busy.act;
   if (busy.kind === 'hold' && SNEAKY.includes(busy.act)) return 'sneaky';
   return 'work';
 }
 
-const playerView = (p: Player): PlayerView => ({
+const playerView = (s: GameState, p: Player): PlayerView => ({
   id: p.id,
   name: p.name,
   look: p.look,
@@ -52,6 +66,7 @@ const playerView = (p: Player): PlayerView => ({
   z: p.z,
   yaw: p.yaw,
   air: p.airborne,
+  pajamas: s.phase === 'day' && !p.dressed && !p.fired,
   kpi: p.kpi,
   warnings: p.warnings,
   fired: p.fired,
@@ -63,11 +78,11 @@ function busyView(s: GameState, p: Player): BusyView | null {
   const busy = p.busy;
   if (!busy) return null;
   if (busy.kind === 'slack') return { kind: 'slack', mode: busy.mode };
-  if (busy.kind === 'minigame') return { kind: 'minigame', game: busy.game, token: busy.startedAt };
-  const st = stationById(busy.target);
-  const label = busy.act === 'work' && st ? `${workAt(p, st)?.step.verb ?? '忙碌'}…` : (HOLD_LABELS[busy.act] ?? '忙碌…');
+  const verb = workOn(p, busy.target)?.step.verb;
+  if (busy.kind === 'minigame') return { kind: 'minigame', game: busy.game, token: busy.startedAt, label: busy.act === 'work' ? (verb ?? '') : '' };
+  const label = shortOfHands(s, p.id) ? '等同事来搭把手…（走开取消）' : busy.act === 'work' ? `${verb ?? '忙碌'}…` : (HOLD_LABELS[busy.act] ?? '忙碌…');
   const progress = clamp((s.time - busy.startedAt) / (busy.endsAt - busy.startedAt), 0, 1);
-  return { kind: 'hold', label, progress };
+  return { kind: 'hold', act: busy.act, label, progress };
 }
 
 const taskViews = (p: Player): TaskView[] =>
@@ -77,6 +92,8 @@ const taskViews = (p: Player): TaskView[] =>
     text: taskText(t),
     kpi: taskDef(t.defId)?.kpi ?? 0,
     target: taskTarget(p, t),
+    targetNpc: currentStep(t)?.npc,
+    ...taskProgress(t),
   }));
 
 function speedFactor(s: GameState, p: Player): number {
@@ -101,8 +118,17 @@ const youView = (s: GameState, p: Player): YouView => ({
   deskId: ownDeskId(p),
   stage: p.stage,
   chased: s.npcs.some((n) => n.chase?.targetId === p.id),
+  seated: p.seat !== null,
+  rolling: isRolling(s, p),
+  clockedIn: p.clockedIn,
   spawn: { seq: p.spawnSeq, x: p.x, z: p.z, yaw: p.yaw },
 });
+
+/** Whether the vehicle the intern is riding has left yet. */
+function isRolling(s: GameState, p: Player): boolean {
+  if (p.stage === 'van') return s.vans.some((v) => v.started && p.cohort === `van:${v.trip}`);
+  return (p.stage === 'train' || p.stage === 'lift') && s.time >= p.rideStartsAt;
+}
 
 const WAKE_UP = 8 * 60;
 const WORK_START = 9 * 60;
@@ -132,14 +158,17 @@ export function buildSnapshots(s: GameState): Map<string, Snapshot> {
     workIn: s.phase === 'day' ? Math.max(0, s.dayStartedAt + COMMUTE_SECONDS - s.time) : 0,
     site: s.site,
     timeLeft,
-    players: playerList(s).map(playerView),
     npcs: s.npcs.map((n) => ({ id: n.id, x: n.x, z: n.z, yaw: n.yaw })),
     printerBroken: s.printer.broken,
     traps: s.traps.map((t) => ({ id: t.id, x: t.x, z: t.z })),
     event: s.event
       ? { type: s.event.type, timeLeft: Math.max(0, s.event.endsAt - s.time), repairs: s.event.repairs }
       : null,
+    okr: s.okr,
+    dayGoal: dayGoal(s),
     ranking: ranking(s),
   };
-  return new Map(playerList(s).map((p) => [p.id, { ...shared, you: youView(s, p) }]));
+  // Riders of other trains, lifts and vans are left out: they share coordinates but not a car.
+  const visibleTo = (p: Player): PlayerView[] => playerList(s).filter((o) => canSee(p, o)).map((o) => playerView(s, o));
+  return new Map(playerList(s).map((p) => [p.id, { ...shared, players: visibleTo(p), you: youView(s, p) }]));
 }

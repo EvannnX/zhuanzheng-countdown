@@ -1,4 +1,6 @@
 import {
+  ASSIST_REWARD,
+  CATCH_COOLDOWN,
   BLAME_RANGE,
   FIX_REWARD,
   HOLD_SECONDS,
@@ -28,20 +30,22 @@ import { stationById } from '../../shared/world.ts';
 import { COMMUTE_INSTANT, completeCommute } from './commute.ts';
 import { misconduct } from './detection.ts';
 import { dropBanana, shove } from './rivalry.ts';
+import { driveResult } from './van.ts';
 import { getPrompts, nearestStation } from './prompts.ts';
+import { countTowardsGoal, helpersAt, liftInProgress, shortOfHands } from './teamwork.ts';
 import { activePlayers, award, patchPlayer, resetTask, roll, say, warn } from './state.ts';
 import type { GameState } from './state.ts';
-import { replaceTask, workAt } from './tasks.ts';
+import { replaceTask, workOn } from './tasks.ts';
 
 const SLACK_ACTS = ['phone', 'sleep', 'stall', 'bench'] as const;
-const INSTANT_ACTS: readonly ActKind[] = ['deliver', 'bribe', 'report', 'summon', 'drop', 'shove', 'banana'];
+const INSTANT_ACTS: readonly ActKind[] = ['deliver', 'bribe', 'report', 'summon', 'drop', 'shove', 'banana', 'catch'];
 type SlackAct = (typeof SLACK_ACTS)[number];
 const isSlackAct = (act: ActKind): act is SlackAct => (SLACK_ACTS as readonly ActKind[]).includes(act);
 
 function completeWork(s: GameState, pid: string, stationId: string): GameState {
   const p = s.players[pid];
   const st = stationById(stationId);
-  const job = st ? workAt(p, st) : null;
+  const job = workOn(p, stationId);
   if (!job) return s;
   const tired = patchPlayer(s, pid, { energy: Math.max(0, p.energy - WORK_ENERGY_COST) });
 
@@ -56,20 +60,36 @@ function completeWork(s: GameState, pid: string, stationId: string): GameState {
   return finishStep(tired, pid, stationId);
 }
 
-function finishStep(s: GameState, pid: string, stationId: string): GameState {
-  const p = s.players[pid];
-  const st = stationById(stationId);
-  const job = st ? workAt(p, st) : null;
-  if (!job) return s;
+/** Pay the interns who helped carry, and let go of their hands. */
+function releaseHelpers(s: GameState, ownerId: string, stationId: string): GameState {
+  const owner = s.players[ownerId];
+  return helpersAt(s, ownerId, stationId).reduce((acc, h) => {
+    const freed = patchPlayer(acc, h.id, { busy: null });
+    return say(award(freed, h.id, ASSIST_REWARD), h.id, `帮 ${owner.name} 抬完了 KPI +${ASSIST_REWARD}`, 'good');
+  }, s);
+}
+
+function finishStep(s0: GameState, pid: string, stationId: string): GameState {
+  const job = workOn(s0.players[pid], stationId);
+  if (!job) return s0;
   const { task, def, step } = job;
-  const isLast = task.step + 1 >= def.steps.length && !def.dests;
-  if (isLast) {
-    const paid = say(award(s, pid, def.kpi), pid, `完成「${def.title}」 KPI +${def.kpi}`, 'good');
-    return replaceTask(paid, pid, task.uid);
+  const s = (step.crew ?? 1) > 1 ? releaseHelpers(s0, pid, stationId) : s0;
+  const p = s.players[pid];
+  const stepsDone = task.step + 1 >= def.steps.length;
+  const ownItem = p.carrying?.taskUid === task.uid;
+  if (stepsDone && !def.dests) {
+    const cleared = ownItem ? patchPlayer(s, pid, { carrying: null }) : s;
+    const paid = say(award(cleared, pid, def.kpi), pid, `完成「${def.title}」 KPI +${def.kpi}`, 'good');
+    return countTowardsGoal(replaceTask(paid, pid, task.uid));
   }
   const tasks = p.tasks.map((t) => (t.uid === task.uid ? { ...t, step: t.step + 1 } : t));
-  const carrying = step.gives ? { kind: step.gives, dest: task.dest, kpi: def.kpi, taskUid: task.uid } : p.carrying;
-  return patchPlayer(s, pid, { tasks, carrying });
+  // The item only becomes deliverable once every step before the hand-over is done.
+  const dest = stepsDone ? task.dest : null;
+  const kind = step.gives ?? (ownItem ? p.carrying?.kind : undefined);
+  const carrying = kind ? { kind, dest, kpi: def.kpi, taskUid: task.uid } : p.carrying;
+  const next = def.steps[task.step + 1];
+  const hint = next ? `下一步：${next.text}` : `最后一步：送到${stationById(task.dest ?? '')?.label ?? '目的地'}`;
+  return say(patchPlayer(s, pid, { tasks, carrying }), pid, `「${def.title}」${hint}`, 'info');
 }
 
 function deliver(s: GameState, pid: string): GameState {
@@ -79,7 +99,8 @@ function deliver(s: GameState, pid: string): GameState {
   const paid = award(patchPlayer(s, pid, { carrying: null }), pid, item.kpi);
   const told = say(paid, pid, `${ITEM_NAMES[item.kind]}已送达 KPI +${item.kpi}`, 'good');
   const own = item.taskUid && p.tasks.some((t) => t.uid === item.taskUid);
-  return own ? replaceTask(told, pid, item.taskUid as string) : told;
+  const settled = own ? replaceTask(told, pid, item.taskUid as string) : told;
+  return item.taskUid ? countTowardsGoal(settled) : settled;
 }
 
 function steal(s: GameState, pid: string, victimId: string): GameState {
@@ -114,6 +135,16 @@ function report(s: GameState, pid: string, targetId: string): GameState {
   }
   const warned = warn(cooled, targetId, 1, `${target.name} 被 ${p.name} 举报摸鱼，警告一次`);
   return say(award(warned, pid, REPORT_REWARD), pid, `举报成功 KPI +${REPORT_REWARD}`, 'good');
+}
+
+/** A sacked intern working as floor monitor writes up whoever they catch slacking. */
+function catchSlacker(s: GameState, pid: string, targetId: string): GameState {
+  const monitor = s.players[pid];
+  const target = s.players[targetId];
+  if (!target || !monitor.fired) return s;
+  const cooled = patchPlayer(s, pid, { reportReadyAt: s.time + CATCH_COOLDOWN });
+  if (misconduct(s, target) === 0) return say(cooled, pid, `${target.name} 这会儿在认真干活，没抓到`, 'info');
+  return say(warn(cooled, targetId, 1, `监工 ${monitor.name} 抓到 ${target.name} 摸鱼，警告一次`), pid, '抓到了！王总很满意', 'good');
 }
 
 function summon(s: GameState, pid: string): GameState {
@@ -170,16 +201,20 @@ export function completeAct(s0: GameState, pid: string, act: ActKind, target: st
     }
     case 'report':
       return report(s, pid, target);
+    case 'catch':
+      return catchSlacker(s, pid, target);
     case 'shove':
       return shove(s, pid, target);
     case 'banana':
       return dropBanana(s, pid);
     case 'summon':
       return summon(s, pid);
+    case 'assist':
+      return s;
     case 'drop':
       return resetTask(patchPlayer(s, pid, { carrying: null }), p.carrying?.taskUid ?? null);
     default:
-      return completeCommute(s, pid, act) ?? s;
+      return completeCommute(s, pid, act, target) ?? s;
   }
 }
 
@@ -202,9 +237,11 @@ export function startAct(s: GameState, pid: string, act: ActKind, target: string
   if (act === 'fix') return minigame('mash');
   if (act === 'work') {
     const st = stationById(target);
-    const job = st ? workAt(p, st) : null;
+    const job = workOn(p, target);
     if (!job) return s;
-    return job.step.kind === 'minigame' ? minigame(job.step.game ?? 'mash') : hold(job.step.seconds ?? 2);
+    if (job.step.kind === 'minigame') return minigame(job.step.game ?? 'mash');
+    const started = hold(job.step.seconds ?? 2);
+    return (job.step.crew ?? 1) > 1 ? say(started, 'all', `${p.name} 在${st?.label}需要人搭把手：过去按 E 帮忙 KPI +${ASSIST_REWARD}`, 'alert') : started;
   }
   return hold(HOLD_SECONDS[act as keyof typeof HOLD_SECONDS] ?? 2);
 }
@@ -212,7 +249,9 @@ export function startAct(s: GameState, pid: string, act: ActKind, target: string
 export function finishMinigame(s: GameState, pid: string, ok: boolean): GameState {
   const busy = s.players[pid]?.busy;
   if (busy?.kind !== 'minigame') return s;
-  if (!ok || s.time - busy.startedAt < MINIGAME_MIN_SECONDS) return patchPlayer(s, pid, { busy: null });
+  const won = ok && s.time - busy.startedAt >= MINIGAME_MIN_SECONDS;
+  if (busy.act === 'drive') return driveResult(patchPlayer(s, pid, { busy: null }), pid, won);
+  if (!won) return patchPlayer(s, pid, { busy: null });
   return completeAct(s, pid, busy.act, busy.target);
 }
 
@@ -236,11 +275,16 @@ export function buy(s: GameState, pid: string, itemId: ShopItemId): GameState {
   return say(paid, pid, `买到了${item.name}`, 'good');
 }
 
-/** Finish every hold whose timer has run out. */
-export function tickHolds(s: GameState): GameState {
+/** Finish every hold whose timer has run out; lifts that are short of hands stand still. */
+export function tickHolds(s: GameState, dt: number): GameState {
   return Object.values(s.players).reduce((acc, p) => {
     const busy = acc.players[p.id]?.busy;
-    if (busy?.kind !== 'hold' || acc.time < busy.endsAt) return acc;
+    if (busy?.kind !== 'hold') return acc;
+    if (busy.act === 'assist' && !liftInProgress(acc, busy.target)) return patchPlayer(acc, p.id, { busy: null });
+    if (busy.act === 'work' && shortOfHands(acc, p.id)) {
+      return patchPlayer(acc, p.id, { busy: { ...busy, startedAt: busy.startedAt + dt, endsAt: busy.endsAt + dt } });
+    }
+    if (acc.time < busy.endsAt) return acc;
     return completeAct(acc, p.id, busy.act, busy.target);
   }, s);
 }

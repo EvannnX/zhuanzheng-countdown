@@ -27,14 +27,17 @@ export function screen(w: number, h: number, kind: ScreenKind): THREE.Mesh {
 /** Desktop monitor on a stand; `y` is the desk surface height. */
 export function monitor(kind: ScreenKind, y = 0.76, size = 0.6): THREE.Group {
   const h = size * 0.6;
-  const face = screen(size - 0.04, h - 0.04, kind);
-  face.position.set(0, 0.14 + h / 2, 0.018);
+  const face = screen(size - 0.03, h - 0.05, kind);
+  face.position.set(0, 0.15 + h / 2, 0.018);
   return group(
     0, y, 0,
     rbox(size, h, 0.03, shiny(DARK), 0, 0.14 + h / 2, 0, 0.012),
     face,
-    box(0.05, 0.16, 0.03, shiny('#374151'), 0, 0.08, -0.03),
-    rbox(0.24, 0.015, 0.16, shiny('#374151'), 0, 0.008, -0.02, 0.006),
+    rbox(size * 0.5, h * 0.5, 0.03, shiny('#2b3340'), 0, 0.14 + h / 2, -0.022, 0.012),
+    box(0.012, 0.012, 0.004, glow('#60a5fa'), size / 2 - 0.04, 0.15, 0.016),
+    turn(box(0.06, 0.2, 0.025, shiny('#374151'), 0, 0.11, -0.05), 0, 0.12),
+    rbox(0.26, 0.014, 0.18, shiny('#374151'), 0, 0.007, -0.03, 0.006),
+    box(0.006, 0.006, 0.12, DARK, 0.02, 0.006, -0.17),
   );
 }
 
@@ -109,22 +112,48 @@ export const deskPlant = (y: number): THREE.Group =>
 export const bin = (color = '#6b7280'): THREE.Group =>
   group(0, 0, 0, cyl(0.15, 0.12, 0.32, color, 0, 0.16, 0, 14), cyl(0.13, 0.13, 0.01, DARK, 0, 0.3, 0, 14));
 
-export function officeChair(color: string): THREE.Group {
+const CHAIR_SEAT_Y = 0.47;
+
+/** Five-star base with twin-wheel casters and a gas lift under its telescoping shroud. */
+function chairBase(): THREE.Object3D[] {
   const spokes = Array.from({ length: 5 }, (_, i) => {
-    const arm = group(0, 0.05, 0, box(0.04, 0.03, 0.3, shiny(DARK), 0, 0, 0.15), ball(0.03, DARK, 0, -0.02, 0.29));
+    const arm = group(
+      0, 0, 0,
+      turn(rbox(0.045, 0.03, 0.31, shiny(DARK), 0, 0.085, 0.16, 0.012), 0, 0.12),
+      cyl(0.012, 0.012, 0.05, shiny(STEEL), 0, 0.055, 0.3, 6),
+      ...[-0.018, 0.018].map((x) => turn(cyl(0.028, 0.028, 0.016, DARK, x, 0.028, 0.3, 10), 0, 0, Math.PI / 2)),
+    );
     return turn(arm, (i / 5) * Math.PI * 2);
   });
+  return [...spokes, cyl(0.05, 0.06, 0.06, shiny(DARK), 0, 0.11, 0, 12), cyl(0.032, 0.032, 0.14, DARK, 0, 0.2, 0, 10), cyl(0.022, 0.022, 0.16, shiny(STEEL), 0, 0.33, 0, 10)];
+}
+
+/** Task chair: mesh back in a frame with a lumbar pad, height-adjustable T-arms and a tilt lever. */
+export function officeChair(color: string): THREE.Group {
+  const back = turn(
+    group(
+      0, CHAIR_SEAT_Y + 0.1, -0.23,
+      ...[-0.21, 0.21].map((x) => rbox(0.035, 0.56, 0.035, shiny(DARK), x, 0.3, 0, 0.012)),
+      rbox(0.455, 0.035, 0.035, shiny(DARK), 0, 0.58, 0, 0.012),
+      rbox(0.455, 0.035, 0.035, shiny(DARK), 0, 0.03, 0, 0.012),
+      box(0.39, 0.52, 0.012, color, 0, 0.305, 0),
+      rbox(0.3, 0.1, 0.04, DARK, 0, 0.17, 0.014, 0.018),
+      rbox(0.06, 0.34, 0.03, shiny(DARK), 0, 0.08, -0.03, 0.012),
+    ),
+    0, -0.12,
+  );
+  const arm = (x: number): THREE.Object3D[] => [box(0.03, 0.2, 0.04, shiny(DARK), x, CHAIR_SEAT_Y + 0.09, 0.02), rbox(0.07, 0.03, 0.26, DARK, x, CHAIR_SEAT_Y + 0.2, 0.02, 0.012), box(0.06, 0.03, 0.06, shiny(DARK), x * 0.86, CHAIR_SEAT_Y - 0.035, 0.02)];
   return group(
     0, 0, 0,
-    ...spokes,
-    cyl(0.025, 0.025, 0.36, shiny(STEEL), 0, 0.24, 0, 10),
-    rbox(0.46, 0.08, 0.46, color, 0, 0.47, 0, 0.035),
-    turn(rbox(0.44, 0.52, 0.07, color, 0, 0.84, -0.24, 0.035), 0, -0.12),
-    box(0.04, 0.3, 0.04, shiny(DARK), 0, 0.6, -0.22),
-    rbox(0.05, 0.03, 0.26, shiny(DARK), -0.26, 0.66, 0, 0.012),
-    rbox(0.05, 0.03, 0.26, shiny(DARK), 0.26, 0.66, 0, 0.012),
-    box(0.03, 0.18, 0.03, shiny(DARK), -0.26, 0.56, 0.02),
-    box(0.03, 0.18, 0.03, shiny(DARK), 0.26, 0.56, 0.02),
+    ...chairBase(),
+    rbox(0.3, 0.05, 0.3, shiny(DARK), 0, CHAIR_SEAT_Y - 0.055, 0, 0.02),
+    rbox(0.46, 0.07, 0.45, color, 0, CHAIR_SEAT_Y, 0, 0.032),
+    rbox(0.44, 0.03, 0.06, color, 0, CHAIR_SEAT_Y - 0.012, 0.215, 0.014),
+    back,
+    rbox(0.06, 0.03, 0.16, shiny(DARK), 0, CHAIR_SEAT_Y - 0.04, -0.2, 0.012),
+    ...arm(-0.265),
+    ...arm(0.265),
+    turn(cyl(0.008, 0.008, 0.14, shiny(DARK), 0.2, CHAIR_SEAT_Y - 0.07, 0.06, 6), 0, 0, Math.PI / 2 - 0.2),
   );
 }
 

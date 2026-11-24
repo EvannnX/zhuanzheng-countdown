@@ -57,19 +57,30 @@ const locker: Builder = (w, d) => {
   ];
 };
 
+const BRASS = '#b8902f';
+const MARBLE = '#3a3d42';
+
+/** Art-deco lift front: dark stone surround stepping up to a fan, brass doors with chevron inlays. */
 function elevator(): THREE.Group {
   const indicator = textPlane('12F ▲', 0.5, 0.16, { bg: '#111827', fg: '#f97316' });
-  indicator.position.set(0, 2.42, 0.03);
+  indicator.position.set(0, 2.42, 0.06);
+  const chevrons = [-0.355, 0.355].flatMap((x) =>
+    [0.5, 0.95, 1.4, 1.85].flatMap((y) => [-1, 1].map((s) => turn(box(0.3, 0.02, 0.006, shiny('#7a5f1e'), x + s * 0.12, y, 0.042), 0, 0, s * -0.5))),
+  );
   return group(
     0, 0, 0,
-    box(1.5, 2.3, 0.04, shiny('#9ca3af'), 0, 1.15, 0),
-    box(0.7, 2.14, 0.02, shiny('#cbd5e1'), -0.355, 1.09, 0.03),
-    box(0.7, 2.14, 0.02, shiny('#cbd5e1'), 0.355, 1.09, 0.03),
+    box(1.84, 2.56, 0.04, MARBLE, 0, 1.28, 0),
+    ...[-1, 0, 1].map((i) => turn(box(0.03, 0.3, 0.006, shiny(BRASS), i * 0.16, 2.42, 0.05), 0, 0, i * -0.5)),
+    ...[-0.83, 0.83].map((x) => box(0.05, 2.5, 0.05, shiny(BRASS), x, 1.25, 0.012)),
+    box(1.5, 0.03, 0.03, shiny(BRASS), 0, 2.27, 0.03),
+    box(0.7, 2.14, 0.02, shiny(BRASS), -0.355, 1.09, 0.03),
+    box(0.7, 2.14, 0.02, shiny(BRASS), 0.355, 1.09, 0.03),
+    ...chevrons,
     box(0.012, 2.14, 0.024, DARK, 0, 1.09, 0.03),
     indicator,
-    rbox(0.1, 0.24, 0.03, shiny(STEEL), 0.95, 1.15, 0.02, 0.012),
-    ball(0.022, glow('#f97316'), 0.95, 1.2, 0.04),
-    ball(0.022, glow('#e5e7eb'), 0.95, 1.1, 0.04),
+    rbox(0.1, 0.24, 0.03, shiny(BRASS), 1.02, 1.15, 0.02, 0.012),
+    ball(0.022, glow('#f97316'), 1.02, 1.2, 0.04),
+    ball(0.022, glow('#e5e7eb'), 1.02, 1.1, 0.04),
   );
 }
 

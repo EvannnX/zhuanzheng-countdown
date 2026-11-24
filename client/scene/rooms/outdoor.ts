@@ -90,6 +90,26 @@ function corridorDecor(): THREE.Object3D[] {
   ];
 }
 
+const IRON = '#1c1c1e';
+
+/** Rooftop hardware on the tower wall: the caged ladder to the upper roof, vent stacks and a bulkhead lamp. */
+function roofKit(): THREE.Object3D[] {
+  const ladder = hang(
+    group(
+      0, 0, 0,
+      ...[-0.22, 0.22].map((x) => box(0.04, 3.9, 0.04, IRON, x, 1.95, 0.14)),
+      ...Array.from({ length: 12 }, (_, i) => box(0.44, 0.03, 0.03, IRON, 0, 0.3 + i * 0.3, 0.14)),
+      ...[0.4, 2, 3.4].flatMap((y) => [-0.22, 0.22].map((x) => box(0.03, 0.03, 0.14, IRON, x, y, 0.07))),
+      ...[2.3, 2.9, 3.5].flatMap((y) => [box(0.7, 0.03, 0.03, IRON, 0, y, 0.72), ...[-0.35, 0.35].map((x) => box(0.03, 0.03, 0.58, IRON, x, y, 0.43))]),
+      ...[-0.35, 0, 0.35].map((x) => box(0.025, 1.3, 0.025, IRON, x, 2.9, 0.72)),
+    ),
+    'w', 40, 21.6, 0, 0.1,
+  );
+  const gooseneck = (x: number, z: number): THREE.Group => at(x, z, 0, cyl(0.07, 0.07, 0.9, '#8f959b', 0, 0.45, 0, 10), turn(cyl(0.07, 0.07, 0.3, '#8f959b', 0.11, 0.9, 0, 10), 0, 0, Math.PI / 2), cyl(0.07, 0.09, 0.14, '#8f959b', 0.24, 0.84, 0, 10));
+  const lamp = hang(group(0, 0, 0, rbox(0.16, 0.22, 0.1, IRON, 0, 0, 0.05, 0.02), rbox(0.11, 0.15, 0.06, glow('#ffe7b0'), 0, 0, 0.1, 0.02)), 'w', 40, 17.2, 2.35, 0.1);
+  return [ladder, lamp, gooseneck(50.6, 12.2), gooseneck(50.9, 13)];
+}
+
 function terraceDecor(): THREE.Object3D[] {
   const poles = [[40.6, 8.6], [51.4, 8.6], [51.4, 23.4], [40.6, 23.4]].map(([x, z]) => cyl(0.035, 0.035, 3, shiny(DARK), x, 1.5, z, 8));
   const bulbs = Array.from({ length: 28 }, (_, i) => {
@@ -107,7 +127,7 @@ function terraceDecor(): THREE.Object3D[] {
   const ashtray = at(44.6, 9, 0, cyl(0.14, 0.14, 0.8, shiny('#6b7280'), 0, 0.4, 0, 12), cyl(0.15, 0.15, 0.03, shiny(DARK), 0, 0.815, 0, 12));
   const sign = poster('天台风大\n吹不走 KPI', 1.5, 0.75, { bg: '#fff7e6', fg: '#c2410c', border: BRAND }, 'w', 40, 19.5, 1.8);
   const pipes = [box(0.1, 0.1, 5, shiny('#9ca3af'), 40.2, 2.6, 11), ...[9, 11, 13].map((z) => box(0.14, 0.04, 0.14, '#6b7280', 40.2, 2.66, z))];
-  return [...poles, ...bulbs, turf, vent, ashtray, ...sign, ...pipes, ball(0.11, shiny('#f97316'), 45.6, 0.11, 21.4)];
+  return [...poles, ...bulbs, turf, vent, ashtray, ...sign, ...pipes, ...roofKit(), ball(0.11, shiny('#f97316'), 45.6, 0.11, 21.4)];
 }
 
 export const outdoor: RoomArt = {

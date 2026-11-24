@@ -6,6 +6,7 @@ import type { Builder } from './types.ts';
 const CABINET = '#f5f0e6';
 const CABINET_DOOR = '#e9dfcc';
 const STONE = '#44403c';
+const ENAMEL = '#f1f1ec';
 const FRIDGE_W = 0.8;
 const COUNTER_TOP = 0.92;
 const NOTES = ['#fde047', '#f472b6', '#60a5fa', '#4ade80'];
@@ -45,14 +46,19 @@ function appliances(): THREE.Object3D[] {
     rbox(0.46, 0.28, 0.34, shiny('#e5e7eb'), -0.9, y + 0.14, -0.15, 0.02),
     box(0.3, 0.2, 0.006, '#111827', -0.95, y + 0.14, 0.022),
     box(0.06, 0.006, 0.004, glow('#4ade80'), -0.73, y + 0.2, 0.022),
-    // hob with a pot and a pan
-    box(0.6, 0.012, 0.4, shiny(DARK), 0.3, y + 0.006, -0.08),
-    ...[0.16, 0.44].map((x) => cyl(0.09, 0.09, 0.004, '#57534e', x, y + 0.014, -0.08, 16)),
-    cyl(0.12, 0.11, 0.12, shiny('#dc2626'), 0.16, y + 0.076, -0.08, 16),
-    cyl(0.125, 0.125, 0.015, shiny('#b91c1c'), 0.16, y + 0.143, -0.08, 16),
-    ball(0.02, DARK, 0.16, y + 0.165, -0.08),
-    cyl(0.11, 0.09, 0.04, shiny(DARK), 0.44, y + 0.036, -0.08, 16),
-    box(0.03, 0.02, 0.2, DARK, 0.44, y + 0.045, 0.1),
+    // old enamel gas range: oven door, four knobs, cast-iron grates and a backguard
+    rbox(0.62, 0.84, 0.03, shiny(ENAMEL), 0.3, 0.47, 0.255, 0.012),
+    box(0.4, 0.26, 0.006, '#1f2937', 0.3, 0.4, 0.272),
+    box(0.46, 0.022, 0.03, shiny(STEEL), 0.3, 0.6, 0.285),
+    ...[0.09, 0.23, 0.37, 0.51].map((x) => cyl(0.024, 0.024, 0.03, DARK, x, 0.8, 0.28, 10).rotateX(Math.PI / 2)),
+    box(0.62, 0.014, 0.42, shiny(ENAMEL), 0.3, y + 0.007, -0.08),
+    box(0.62, 0.16, 0.03, shiny(ENAMEL), 0.3, y + 0.08, -0.31),
+    ...[0.16, 0.44].flatMap((x) => [box(0.2, 0.012, 0.02, DARK, x, y + 0.02, -0.08), box(0.02, 0.012, 0.2, DARK, x, y + 0.02, -0.08), cyl(0.04, 0.04, 0.008, '#57534e', x, y + 0.018, -0.08, 12)]),
+    cyl(0.12, 0.11, 0.12, shiny('#dc2626'), 0.16, y + 0.086, -0.08, 16),
+    cyl(0.125, 0.125, 0.015, shiny('#b91c1c'), 0.16, y + 0.153, -0.08, 16),
+    ball(0.02, DARK, 0.16, y + 0.175, -0.08),
+    cyl(0.11, 0.09, 0.04, shiny(DARK), 0.44, y + 0.046, -0.08, 16),
+    box(0.03, 0.02, 0.2, DARK, 0.44, y + 0.055, 0.1),
     // kettle, sink, rice cooker
     group(0.95, y, -0.1, cyl(0.07, 0.085, 0.18, shiny('#f8fafc'), 0, 0.09, 0, 14), cyl(0.05, 0.07, 0.03, shiny(DARK), 0, 0.195, 0, 14), box(0.02, 0.12, 0.03, DARK, 0.1, 0.1, 0)),
     box(0.5, 0.008, 0.36, shiny('#9ca3af'), 1.5, y + 0.004, -0.08),

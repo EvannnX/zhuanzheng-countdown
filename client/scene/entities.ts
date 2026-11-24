@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Snapshot } from '../../shared/protocol.ts';
+import type { PlayerStatus, Snapshot } from '../../shared/protocol.ts';
 import { NPC_NAMES, STATIONS } from '../../shared/world.ts';
 import { NPC_LOOKS, PLAYER_LOOKS, makeCharacter } from './characters.ts';
 import type { Character } from './characters.ts';
@@ -18,6 +18,12 @@ function peel(): THREE.Group {
 export interface Entities {
   readonly root: THREE.Group;
   sync(snap: Snapshot): void;
+  /** Put the player's own body (seen only in mirrors) where the camera is. */
+  placeSelf(x: number, y: number, z: number, yaw: number): void;
+  /** Force a routine on the player's own body (`?act=` art preview). */
+  poseSelf(status: PlayerStatus, pajamas: boolean): void;
+  /** Show or hide the player's own body. */
+  showSelf(on: boolean): void;
   update(dt: number, time: number): void;
 }
 
@@ -29,6 +35,24 @@ export function makeEntities(): Entities {
   const crown = labelSprite('👑', 0.36);
   crown.visible = false;
   let leaderId = '';
+  // Drawn over everything, so the director can be tracked down through walls.
+  const npcArrow = labelSprite('▼ 签字', 0.34, { fg: '#fde047' });
+  npcArrow.material.depthTest = false;
+  npcArrow.renderOrder = 10;
+  npcArrow.visible = false;
+  let wantedNpc = '';
+  let self: Character | null = null;
+  let selfLook = -1;
+  let selfAt = { x: 0, y: 0, z: 0, yaw: 0 };
+  const ensureSelf = (lookIndex: number): Character => {
+    if (self && selfLook === lookIndex) return self;
+    self?.dispose();
+    selfLook = lookIndex;
+    self = makeCharacter(PLAYER_LOOKS[lookIndex % PLAYER_LOOKS.length], '', 0, 0, 0, true);
+    self.root.visible = false;
+    root.add(self.root);
+    return self;
+  };
 
   const markers = new Map(
     STATIONS.filter((s) => s.type !== 'desk' && s.type !== 'shop').map((s) => {
@@ -51,7 +75,7 @@ export function makeEntities(): Entities {
   alert.visible = false;
   const stall = labelSprite('老张 · 摸鱼小卖部', 0.3, { bg: '#b45309', fg: '#fff7d6' });
   stall.position.set(18.6, 2.5, 10.5);
-  root.add(...markers.values(), ...arrows.values(), alert, stall, crown);
+  root.add(...markers.values(), ...arrows.values(), alert, stall, crown, npcArrow);
 
   const ensure = (id: string, make: () => Character): Character => {
     const existing = characters.get(id);
@@ -67,12 +91,18 @@ export function makeEntities(): Entities {
     sync(snap) {
       const alive = new Set<string>();
       for (const p of snap.players) {
-        if (p.id === snap.you.id) continue;
+        if (p.id === snap.you.id) {
+          const body = ensureSelf(p.look);
+          body.setStatus(p.status, p.carrying, p.fired);
+          body.setOutfit(p.pajamas);
+          continue;
+        }
         alive.add(p.id);
         const look = PLAYER_LOOKS[p.look % PLAYER_LOOKS.length];
-        const character = ensure(p.id, () => makeCharacter(look, p.name, p.x, p.z, p.yaw));
+        const character = ensure(p.id, () => makeCharacter(look, p.name, p.x, p.z, p.yaw, true));
         character.moveTo(p.x, p.z, p.yaw, p.air);
         character.setStatus(p.status, p.carrying, p.fired);
+        character.setOutfit(p.pajamas);
       }
       for (const n of snap.npcs) {
         alive.add(n.id);
@@ -86,6 +116,7 @@ export function makeEntities(): Entities {
       const targets = new Set(snap.you.tasks.map((t) => t.target));
       for (const [id, arrow] of arrows) arrow.visible = snap.phase === 'day' && targets.has(id);
       alert.visible = snap.printerBroken;
+      wantedNpc = (snap.phase === 'day' && snap.you.tasks.find((t) => t.targetNpc)?.targetNpc) || '';
 
       const seen = new Set(snap.traps.map((t) => t.id));
       for (const t of snap.traps) {
@@ -104,12 +135,34 @@ export function makeEntities(): Entities {
       const leader = snap.ranking[0];
       leaderId = snap.players.length > 1 && leader && leader.kpi > 0 && !leader.fired ? leader.id : '';
     },
+    placeSelf(x, y, z, yaw) {
+      selfAt = { x, y, z, yaw };
+      if (!self) ensureSelf(0);
+    },
+    poseSelf(status, pajamas) {
+      const body = self ?? ensureSelf(0);
+      body.setStatus(status, null, false);
+      body.setOutfit(pajamas);
+    },
+    showSelf(on) {
+      if (self) self.root.visible = on;
+    },
     update(dt, time) {
       for (const character of characters.values()) character.update(dt);
+      if (self) {
+        // Run the pose animation, then pin the body exactly where the camera stands.
+        self.moveTo(selfAt.x, selfAt.z, selfAt.yaw);
+        self.update(dt);
+        self.root.position.set(selfAt.x, selfAt.y, selfAt.z);
+        self.root.rotation.y = selfAt.yaw;
+      }
       const wearer = characters.get(leaderId);
       crown.visible = wearer !== undefined;
       if (wearer) crown.position.set(wearer.root.position.x, CROWN_Y + Math.sin(time * 3) * 0.04, wearer.root.position.z);
       const bounce = Math.sin(time * 4) * 0.08;
+      const wanted = characters.get(wantedNpc);
+      npcArrow.visible = wanted !== undefined;
+      if (wanted) npcArrow.position.set(wanted.root.position.x, ARROW_Y + 0.1 + bounce, wanted.root.position.z);
       for (const arrow of arrows.values()) if (arrow.visible) arrow.position.y = ARROW_Y + bounce;
     },
   };

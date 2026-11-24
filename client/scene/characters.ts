@@ -4,6 +4,7 @@ import type { PlayerStatus } from '../../shared/protocol.ts';
 import type { ItemKind } from '../../shared/tasks.ts';
 import type { NpcId } from '../../shared/world.ts';
 import { ball, box, cyl, group, labelSprite, makeItem, mat, rbox } from './kit.ts';
+import type { Paint } from './kit.ts';
 
 type HairStyle = 'flat' | 'part' | 'bun' | 'bob' | 'spiky' | 'combover' | 'curly';
 
@@ -83,9 +84,15 @@ const STATUS_ICONS: Record<PlayerStatus, string> = {
   sleep: '💤',
   stall: '🚽',
   bench: '🌤️',
-  eat: '🍪',
+  eat: '',
+  seated: '',
+  wash: '',
+  dress: '',
   sneaky: '🤫',
 };
+
+const PAJAMA_TOP = '#93c5fd';
+const PAJAMA_BOTTOM = '#bfdbfe';
 
 /** A jump as other players see it: a 0.7 s arc. */
 const HOP_SECONDS = 0.7;
@@ -97,6 +104,8 @@ export interface Character {
   moveTo(x: number, z: number, yaw: number, air?: boolean): void;
   update(dt: number): void;
   setStatus(status: PlayerStatus, carrying: ItemKind | null, ghost: boolean): void;
+  /** Pyjamas or work clothes. Only characters built with a wardrobe can change. */
+  setOutfit(pajamas: boolean): void;
   /** Freeze in a seated typing pose (for colleagues who never move). */
   sit(): void;
   dispose(): void;
@@ -106,13 +115,39 @@ const GHOST_MATERIAL = new THREE.MeshLambertMaterial({ color: '#cbd5e1', transpa
 const FOLLOW_RATE = 12;
 const STRIDE = 7;
 
-export function makeCharacter(look: Look, name: string, x: number, z: number, yaw: number): Character {
+/** What a character holds while brushing, eating or pulling a shirt on. */
+function actionProp(status: PlayerStatus): THREE.Object3D | null {
+  if (status === 'wash') return group(0, 0, 0, cyl(0.012, 0.012, 0.2, '#38bdf8', 0, 0.06, 0.02, 6), box(0.03, 0.05, 0.03, '#ffffff', 0, 0.17, 0.02), ball(0.035, '#ffffff', 0, 0.19, 0.03));
+  if (status === 'eat') return group(0, 0, 0, rbox(0.13, 0.1, 0.09, '#d6a56c', 0, 0.02, 0.05, 0.035), rbox(0.11, 0.03, 0.08, '#fde68a', 0, 0.06, 0.05, 0.012));
+  if (status === 'dress') return rbox(0.34, 0.4, 0.03, '#ffffff', 0, -0.12, 0.08, 0.012);
+  return null;
+}
+
+/** Arm, body and head offsets for the morning routines, as a function of time. */
+function actionPose(status: PlayerStatus, t: number): { armL: number; armR: number; armRz: number; lean: number; twist: number; bob: number } | null {
+  if (status === 'wash') return { armL: 0, armR: -2.25 + Math.sin(t * 16) * 0.1, armRz: -0.45 + Math.sin(t * 16) * 0.12, lean: 0.14, twist: 0, bob: 0 };
+  if (status === 'eat') {
+    const bite = Math.max(0, Math.sin(t * 5.5));
+    return { armL: 0, armR: -1.35 - bite * 0.95, armRz: -0.3 * bite, lean: 0.05 * bite, twist: 0, bob: bite * 0.015 };
+  }
+  if (status === 'dress') return { armL: -2.5 + Math.sin(t * 7) * 0.5, armR: -2.5 - Math.sin(t * 7) * 0.5, armRz: 0, lean: 0, twist: Math.sin(t * 5) * 0.4, bob: Math.abs(Math.sin(t * 7)) * 0.05 };
+  return null;
+}
+
+export function makeCharacter(look: Look, name: string, x: number, z: number, yaw: number, wardrobe = false): Character {
+  // Characters that change clothes get their own cloth materials; everyone else shares the cached ones.
+  const cloth = (color: string): Paint => (wardrobe ? new THREE.MeshLambertMaterial({ color }) : color);
+  const shirt = cloth(look.shirt);
+  const pants = cloth(look.pants);
+  const recolor = (paint: Paint, color: string): void => {
+    if (typeof paint !== 'string' && 'color' in paint) (paint as THREE.MeshLambertMaterial).color.set(color);
+  };
   const leg = (side: number): THREE.Group =>
-    group(side * 0.11, 0.5, 0, rbox(0.15, 0.46, 0.17, look.pants, 0, -0.22, 0, 0.05), rbox(0.16, 0.09, 0.27, look.shoes ?? '#f8fafc', 0, -0.455, 0.04, 0.04), box(0.16, 0.025, 0.27, '#94a3b8', 0, -0.49, 0.04));
+    group(side * 0.11, 0.5, 0, rbox(0.15, 0.46, 0.17, pants, 0, -0.22, 0, 0.05), rbox(0.16, 0.09, 0.27, look.shoes ?? '#f8fafc', 0, -0.455, 0.04, 0.04), box(0.16, 0.025, 0.27, '#94a3b8', 0, -0.49, 0.04));
   const legL = leg(-1);
   const legR = leg(1);
   const arm = (side: number): THREE.Group =>
-    group(side * 0.3, 1.1, 0, rbox(0.11, 0.4, 0.11, look.shirt, 0, -0.2, 0, 0.045), rbox(0.115, 0.05, 0.115, look.cuff ?? look.shirt, 0, -0.39, 0, 0.02), ball(0.065, look.skin, 0, -0.45, 0));
+    group(side * 0.3, 1.1, 0, rbox(0.11, 0.4, 0.11, shirt, 0, -0.2, 0, 0.045), rbox(0.115, 0.05, 0.115, look.cuff ?? shirt, 0, -0.39, 0, 0.02), ball(0.065, look.skin, 0, -0.45, 0));
   const armL = arm(-1);
   const armR = arm(1);
 
@@ -132,7 +167,7 @@ export function makeCharacter(look: Look, name: string, x: number, z: number, ya
     : [];
   const lensShine = look.glasses ? [box(0.1, 0.06, 0.02, '#e0f2fe', -0.1, 1.43, 0.25), box(0.1, 0.06, 0.02, '#e0f2fe', 0.1, 1.43, 0.25)] : [];
 
-  const torso = cyl(0.2, 0.28, 0.62, look.shirt, 0, 0.82, 0, 10);
+  const torso = cyl(0.2, 0.28, 0.62, shirt, 0, 0.82, 0, 10);
   const lanyard = [
     box(0.02, 0.26, 0.02, look.badge, -0.07, 1.0, 0.2),
     box(0.02, 0.26, 0.02, look.badge, 0.07, 1.0, 0.2),
@@ -143,7 +178,7 @@ export function makeCharacter(look: Look, name: string, x: number, z: number, ya
   const collar = [
     cyl(0.1, 0.12, 0.08, look.skin, 0, 1.15, 0, 12),
     ...[-1, 1].map((side) => {
-      const flap = box(0.12, 0.06, 0.03, look.collar ?? look.shirt, side * 0.07, 1.12, 0.17);
+      const flap = box(0.12, 0.06, 0.03, look.collar ?? shirt, side * 0.07, 1.12, 0.17);
       flap.rotation.z = side * -0.5;
       return flap;
     }),
@@ -151,7 +186,7 @@ export function makeCharacter(look: Look, name: string, x: number, z: number, ya
     ...[0.98, 0.86, 0.74].map((y) => ball(0.014, '#cbd5e1', 0, y, 0.235 + (1.0 - y) * 0.11)),
   ];
 
-  const body = group(0, 0, 0, legL, legR, armL, armR, torso, head, ...face, ...glasses, ...lensShine, ...hair(look.hairStyle, look.hair), ...lanyard, ...tie, ...collar);
+  const body = group(0, 0, 0, legL, legR, armL, armR, torso, head, ...face, ...glasses, ...lensShine, ...hair(look.hairStyle, look.hair), ...tie, ...collar);
   body.scale.setScalar(look.scale);
   body.traverse((child) => {
     if (child instanceof THREE.Mesh) child.castShadow = true;
@@ -166,6 +201,11 @@ export function makeCharacter(look: Look, name: string, x: number, z: number, ya
   const iconSlot = group(0, 2.25 * look.scale + 0.05, 0);
   const itemSlot = group(0, 0.95, 0.36);
   body.add(itemSlot);
+  const handSlot = group(0, -0.5, 0.02);
+  armR.add(handSlot);
+  const badgeParts = group(0, 0, 0, ...lanyard);
+  body.add(badgeParts);
+  let clock = 0;
 
   const root = group(x, 0, z, body, shadow, nameTag, iconSlot);
   root.rotation.y = yaw;
@@ -213,11 +253,27 @@ export function makeCharacter(look: Look, name: string, x: number, z: number, ya
       const swing = walking ? Math.sin(phase) * 0.6 : 0;
       legL.rotation.x = swing;
       legR.rotation.x = -swing;
-      const holding = carried !== null || status === 'eat';
+      const holding = carried !== null;
       armL.rotation.x = holding ? -1.1 : -swing;
       armR.rotation.x = status === 'phone' || holding ? -1.1 : swing;
       body.rotation.x = status === 'sleep' ? 0.55 : status === 'sneaky' ? 0.2 : 0;
       body.position.y = status === 'stall' || status === 'bench' ? -0.22 : walking ? Math.abs(Math.sin(phase)) * 0.03 : 0;
+      if (status === 'seated') {
+        legL.rotation.x = -1.45;
+        legR.rotation.x = -1.45;
+        armL.rotation.x = -0.5;
+        armR.rotation.x = -0.5;
+      }
+      clock += dt;
+      const pose = actionPose(status, clock);
+      armR.rotation.z = pose?.armRz ?? 0;
+      body.rotation.y = pose?.twist ?? 0;
+      if (pose) {
+        armL.rotation.x = pose.armL;
+        armR.rotation.x = pose.armR;
+        body.rotation.x = pose.lean;
+        body.position.y = pose.bob;
+      }
     },
     setStatus(next, carrying, ghost) {
       if (next !== status || ghost !== isGhost) {
@@ -228,6 +284,9 @@ export function makeCharacter(look: Look, name: string, x: number, z: number, ya
         }
         const icon = ghost ? '👻' : STATUS_ICONS[next];
         if (icon) iconSlot.add(labelSprite(icon, 0.34));
+        handSlot.clear();
+        const prop = actionProp(next);
+        if (prop) handSlot.add(prop);
       }
       if (ghost !== isGhost) {
         isGhost = ghost;
@@ -242,6 +301,11 @@ export function makeCharacter(look: Look, name: string, x: number, z: number, ya
         itemSlot.clear();
         if (carrying) itemSlot.add(makeItem(carrying));
       }
+    },
+    setOutfit(pajamas) {
+      recolor(shirt, pajamas ? PAJAMA_TOP : look.shirt);
+      recolor(pants, pajamas ? PAJAMA_BOTTOM : look.pants);
+      badgeParts.visible = !pajamas;
     },
     sit() {
       legL.rotation.x = -1.45;

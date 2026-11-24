@@ -50,6 +50,8 @@ export interface Player {
   readonly fakeScreens: number;
   readonly slippersDay: number;
   readonly tamperedDay: number;
+  /** Last day the restroom told this intern one of its stories. */
+  readonly stallStoryDay: number;
   readonly stage: Stage;
   readonly washed: boolean;
   readonly dressed: boolean;
@@ -61,6 +63,36 @@ export interface Player {
   readonly safeUntil: number;
   readonly shoveReadyAt: number;
   readonly bananas: number;
+  /** KPI at this morning's alarm, to measure what was earned today. */
+  readonly dayStartKpi: number;
+  /** When the train, lift or van this intern is riding sets off and when it gets there. */
+  readonly rideStartsAt: number;
+  readonly rideEndsAt: number;
+  /** The seat taken on the train or in the shuttle, if any. */
+  readonly seat: string | null;
+  /** Which train, lift or van the intern is in. Riders only ever see their own cohort. */
+  readonly cohort: string | null;
+  /** Lines of lift small talk already heard on this ride. */
+  readonly rideTalks: number;
+  /** Riding the lift down (away days) rather than up. */
+  readonly liftDown: boolean;
+  /** The lobby turnstile has accepted today's badge swipe. */
+  readonly badged: boolean;
+  /** Holding today's dispatch slip (away days). */
+  readonly hasSlip: boolean;
+  /** Punctuality has been settled for today. */
+  readonly clockedIn: boolean;
+}
+
+/** One trip of the away-day shuttle. */
+export interface Van {
+  readonly trip: number;
+  readonly driverId: string;
+  readonly leavesAt: number;
+  readonly arrivesAt: number;
+  /** On the road: nobody else can board. */
+  readonly started: boolean;
+  readonly detours: number;
 }
 
 export interface Trap {
@@ -104,6 +136,8 @@ export interface GameState {
   readonly day: number;
   readonly time: number;
   readonly phaseEndsAt: number;
+  /** The opening film has already been shown to this room. */
+  readonly introShown: boolean;
   readonly players: Readonly<Record<string, Player>>;
   readonly npcs: readonly Npc[];
   readonly printer: { readonly broken: boolean; readonly culpritId: string | null };
@@ -116,10 +150,14 @@ export interface GameState {
   readonly site: Site;
   readonly dayStartedAt: number;
   readonly breakfastLeft: number;
-  readonly train: { readonly cycle: number; readonly boarded: number };
   /** How many interns have clocked in today. */
   readonly arrivals: number;
   readonly traps: readonly Trap[];
+  /** Department goal: tasks finished by anyone today against the target. */
+  readonly okr: { readonly done: number; readonly goal: number };
+  /** Shuttles that are boarding or on the road. */
+  readonly vans: readonly Van[];
+  readonly nextVanTrip: number;
 }
 
 /** On away days the boss comes along to supervise; everyone else stays at the office. */
@@ -140,6 +178,7 @@ export function createGame(code: string, seed: number): GameState {
     day: 0,
     time: 0,
     phaseEndsAt: 0,
+    introShown: false,
     players: {},
     npcs: freshNpcs(),
     printer: { broken: false, culpritId: null },
@@ -151,9 +190,11 @@ export function createGame(code: string, seed: number): GameState {
     site: 'office',
     dayStartedAt: 0,
     breakfastLeft: 0,
-    train: { cycle: -1, boarded: 0 },
     arrivals: 0,
     traps: [],
+    okr: { done: 0, goal: 0 },
+    vans: [],
+    nextVanTrip: 1,
   };
 }
 
@@ -172,6 +213,9 @@ export const roll = (s: GameState): [number, GameState] => {
   const [value, seed] = nextRandom(s.seed);
   return [value, { ...s, seed }];
 };
+
+/** Nothing ridden, swiped or collected yet: how every intern starts a morning. */
+export const FRESH_TRIP = { rideStartsAt: 0, rideEndsAt: 0, seat: null, cohort: null, rideTalks: 0, liftDown: false, badged: false, hasSlip: false, clockedIn: false } as const;
 
 /** Reset the per-game stats, keeping identity and seat. */
 export function resetStats(p: Player, time: number): Player {
@@ -195,12 +239,15 @@ export function resetStats(p: Player, time: number): Player {
     fakeScreens: 0,
     slippersDay: 0,
     tamperedDay: 0,
+    stallStoryDay: 0,
     stage: 'work',
     washed: false,
     dressed: false,
     ate: false,
     pancake: false,
     airborne: false,
+    dayStartKpi: 0,
+    ...FRESH_TRIP,
     safeUntil: 0,
     shoveReadyAt: 0,
     bananas: 0,
@@ -250,5 +297,5 @@ export function warn(s: GameState, id: string, severity: number, text: string): 
   if (warnings < MAX_WARNINGS) return warned;
   const dropped = resetTask(warned, p.carrying?.taskUid ?? null);
   const fired = patchPlayer(dropped, id, { fired: true, carrying: null, tasks: [] });
-  return say(fired, 'all', `${p.name} 被劝退了，变成了游荡的外包幽灵`, 'alert');
+  return say(fired, 'all', `${p.name} 被劝退了，被王总返聘成了监工：现在轮到他抓别人摸鱼`, 'alert');
 }

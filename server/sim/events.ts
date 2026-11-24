@@ -1,6 +1,7 @@
 import {
   COMMUTE_SECONDS,
   DAY_SECONDS,
+  EVENT_WINDOW_SECONDS,
   DRILL_FIRST_REWARD,
   DRILL_PENALTY,
   DRILL_REWARD,
@@ -39,7 +40,7 @@ export function scheduleEvents(s: GameState, dayStart: number): GameState {
     state = s2;
     const type = pool[Math.floor(pick * pool.length)];
     pool = pool.filter((k) => k !== type);
-    const workSeconds = DAY_SECONDS - COMMUTE_SECONDS;
+    const workSeconds = Math.min(DAY_SECONDS - COMMUTE_SECONDS, EVENT_WINDOW_SECONDS);
     return { type, at: dayStart + COMMUTE_SECONDS + workSeconds * (slot + (jitter * 2 - 1) * EVENT_JITTER) };
   });
   return { ...state, eventQueue: queue, event: null };

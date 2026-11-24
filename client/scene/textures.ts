@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { FONT, paintTexture } from './kit.ts';
 
-type Ctx = CanvasRenderingContext2D;
+export type Ctx = CanvasRenderingContext2D;
 const SIZE = 512;
 
 /** Small deterministic generator so every client draws identical textures. */
-function seeded(seed: number): () => number {
+export function seeded(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
@@ -13,14 +13,14 @@ function seeded(seed: number): () => number {
   };
 }
 
-function tiling(draw: (ctx: Ctx, size: number) => void): THREE.CanvasTexture {
+export function tiling(draw: (ctx: Ctx, size: number) => void): THREE.CanvasTexture {
   const texture = paintTexture(SIZE, SIZE, (ctx) => draw(ctx, SIZE));
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   return texture;
 }
 
-function speckle(ctx: Ctx, size: number, count: number, colors: readonly string[], maxSize: number, seed: number): void {
+export function speckle(ctx: Ctx, size: number, count: number, colors: readonly string[], maxSize: number, seed: number): void {
   const rnd = seeded(seed);
   for (let i = 0; i < count; i++) {
     ctx.fillStyle = colors[Math.floor(rnd() * colors.length)];

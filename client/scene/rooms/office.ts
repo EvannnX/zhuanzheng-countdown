@@ -1,13 +1,15 @@
 import type * as THREE from 'three';
 import { PROPS } from '../../../shared/world.ts';
 import { STAFF_LOOKS, makeCharacter } from '../characters.ts';
-import { ball, box, cyl, group, pick, rbox, shiny, textPlane, turn } from '../kit.ts';
+import { ball, box, cyl, glow, group, pick, rbox, shiny, textPlane, turn } from '../kit.ts';
+import { deliCup } from '../nycParts.ts';
 import { BRAND, DARK, STEEL, WHITE, WOOD, at, bin, deskLamp, deskPlant, keyboardSet, monitor, mug, noticeBoard, officeChair, papers, plant, rug, screen, wallClock, waterDispenser } from '../parts.ts';
 import { hang, poster } from '../shell.ts';
 import type { ScreenKind } from '../textures.ts';
+import { officeLoft } from './officeLoft.ts';
 import type { Builder, RoomArt } from './types.ts';
 
-const FABRIC = '#aab4c0';
+const FABRIC = '#9aa4b0';
 const TOP_Y = 0.76;
 const CHAIRS = ['#2563eb', '#0f766e', '#7c3aed', '#374151'];
 const SCREENS: readonly ScreenKind[] = ['code', 'sheet', 'code', 'chart'];
@@ -44,6 +46,11 @@ const deskWith = (staffed: boolean): Builder => (w, d, index) => {
     group(w / 2 - 0.36, 0, 0.02, rbox(0.4, 0.56, 0.52, '#e5e7eb', 0, 0.3, 0, 0.02), ...[0.14, 0.32, 0.48].map((y) => box(0.36, 0.006, 0.01, '#9ca3af', 0, y + 0.05, 0.262)), ...[0.14, 0.32, 0.48].map((y) => box(0.12, 0.016, 0.02, shiny(STEEL), 0, y - 0.03, 0.268))),
     ...stickies,
     ...clutter(index, w, d),
+    // PC tower under the desk, cable grommet and the power strip along the screen
+    group(-w / 2 + 0.62, 0, -0.14, rbox(0.18, 0.42, 0.4, shiny(DARK), 0, 0.23, 0, 0.015), box(0.012, 0.012, 0.004, glow('#22c55e'), 0.04, 0.38, 0.202), box(0.12, 0.02, 0.004, '#374151', 0, 0.3, 0.202)),
+    cyl(0.03, 0.03, 0.006, DARK, 0.42, TOP_Y + 0.003, -d / 2 + 0.24, 10),
+    box(0.34, 0.035, 0.05, WHITE, -0.42, TOP_Y + 0.018, -d / 2 + 0.12),
+    ...(index % 3 === 0 ? [group(0.34, TOP_Y, 0.2, deliCup())] : []),
     staffed
       ? turn(group(0, 0, d / 2 + 0.42, officeChair(pick(CHAIRS, index))), Math.PI)
       : turn(group(-0.5, 0, d / 2 + 0.5, officeChair(pick(CHAIRS, index))), 2.5 + (index % 3) * 0.25),
@@ -120,7 +127,7 @@ function decor(): THREE.Object3D[] {
   return [
     tv,
     ...poster('今天不努力\n明天努力找工作', 2.2, 1, { bg: '#dc2626', fg: '#fff7d6' }, 's', 14, 9.6, 1.9),
-    hang(noticeBoard(1.5, 1, 4), 'w', 0, 6.75, 1.6, 0.1),
+    hang(noticeBoard(1.3, 0.9, 4), 'w', 0, 12.7, 1.75, 0.1),
     hang(wallClock(), 'e', 20, 8.4, 2.3, 0.1),
     ...poster('工位禁止睡觉\n（被发现的话）', 1.5, 0.7, { bg: '#fff7e6', fg: '#c2410c', border: BRAND }, 'e', 20, 12.6, 1.8),
     hanging('产品研发部', 8.8, 5),
@@ -134,6 +141,7 @@ function decor(): THREE.Object3D[] {
     at(8.8, 0.6, 0, plant('leafy', 0.9)),
     at(0.6, 0.6, 0, plant('tree', 0.9)),
     ...colleagues(),
+    ...officeLoft(),
   ];
 }
 

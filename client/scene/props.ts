@@ -9,17 +9,22 @@ import { lobby } from './rooms/lobby.ts';
 import { meeting } from './rooms/meeting.ts';
 import { office } from './rooms/office.ts';
 import { outdoor } from './rooms/outdoor.ts';
+import { plaza } from './rooms/plaza.ts';
+import { elevator } from './rooms/elevator.ts';
+import { towerLobby } from './rooms/towerLobby.ts';
+import { van } from './rooms/van.ts';
 import { pantry } from './rooms/pantry.ts';
 import { print } from './rooms/print.ts';
 import { restroom } from './rooms/restroom.ts';
 import { subway } from './rooms/subway.ts';
+import { train } from './rooms/train.ts';
 import type { Builder, RoomArt } from './rooms/types.ts';
 import { contactShadow } from './textures.ts';
 
-const ROOM_ART: readonly RoomArt[] = [office, meeting, director, pantry, print, restroom, lobby, outdoor, away, home, subway];
+const ROOM_ART: readonly RoomArt[] = [office, meeting, director, pantry, print, restroom, lobby, outdoor, away, home, subway, train, plaza, towerLobby, elevator, van];
 const BUILDERS: Readonly<Record<string, Builder>> = Object.assign({}, ...ROOM_ART.map((r) => r.builders));
 const ROTATION: Record<Face, number> = { s: 0, e: Math.PI / 2, n: Math.PI, w: -Math.PI / 2 };
-const NO_SHADOW_KINDS = ['partition', 'stallFront', 'parasol', 'homeWall'];
+const NO_SHADOW_KINDS = ['partition', 'stallFront', 'parasol', 'homeWall', 'carBench', 'doorJamb', 'lobbyRail'];
 const SHADOW_MARGIN = 0.5;
 const RACK = { x: 17.3 - 0.46, z: 24 };
 

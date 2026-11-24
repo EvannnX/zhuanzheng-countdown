@@ -3,17 +3,21 @@ import type { GameKind, ItemKind, ShopItemId, Site } from './tasks.ts';
 import { SHOP } from './tasks.ts';
 import type { NpcId } from './world.ts';
 
-export type Phase = 'lobby' | 'day' | 'summary' | 'final';
+export type Phase = 'lobby' | 'intro' | 'day' | 'summary' | 'final';
 export type EventKind = 'inspection' | 'serverDown' | 'meeting' | 'fireDrill' | 'teaTime' | 'rush';
 /** How far through the morning an intern has got. */
-export type Stage = 'home' | 'street' | 'subway' | 'work';
+/**
+ * Office days: home → street → subway → train → plaza → lobby → lift → work.
+ * Away days carry on after the lift: dispatch (12F) → lift (down) → depart → van → work.
+ */
+export type Stage = 'home' | 'street' | 'subway' | 'train' | 'plaza' | 'lobby' | 'lift' | 'dispatch' | 'depart' | 'van' | 'work';
 export type SlackMode = 'phone' | 'sleep' | 'stall' | 'bench';
 export type Tone = 'good' | 'bad' | 'info' | 'alert';
 
 export const ACT_KINDS = [
   'work', 'deliver', 'fix', 'blame', 'jam', 'sleep', 'stall', 'bench', 'phone', 'snack',
   'eat', 'tamper', 'repair', 'shop', 'steal', 'report', 'bribe', 'summon', 'drop',
-  'wash', 'dress', 'breakfast', 'exit', 'pancake', 'enter', 'board', 'stun', 'shove', 'banana',
+  'wash', 'dress', 'breakfast', 'exit', 'pancake', 'enter', 'board', 'stun', 'shove', 'banana', 'assist', 'seat', 'catch', 'badge', 'lift', 'slip', 'drive', 'ride',
 ] as const;
 export type ActKind = (typeof ACT_KINDS)[number];
 
@@ -27,7 +31,7 @@ export interface Prompt {
   readonly disabled?: boolean;
 }
 
-export type PlayerStatus = 'idle' | 'work' | 'eat' | 'sneaky' | SlackMode;
+export type PlayerStatus = 'idle' | 'work' | 'eat' | 'wash' | 'dress' | 'seated' | 'sneaky' | SlackMode;
 
 export interface PlayerView {
   readonly id: string;
@@ -38,6 +42,8 @@ export interface PlayerView {
   readonly yaw: number;
   /** In the middle of a jump. */
   readonly air: boolean;
+  /** Still in pyjamas: has not changed at the wardrobe today. */
+  readonly pajamas: boolean;
   readonly kpi: number;
   readonly warnings: number;
   readonly fired: boolean;
@@ -58,14 +64,19 @@ export interface TaskView {
   readonly text: string;
   readonly kpi: number;
   readonly target: string | null;
+  /** The colleague to find when the stage is done face to face. */
+  readonly targetNpc?: NpcId;
+  /** Finished steps and total steps (a final delivery counts as one). */
+  readonly step?: number;
+  readonly steps?: number;
   /** Shown instead of a KPI number (morning chores). */
   readonly reward?: string;
   readonly done?: boolean;
 }
 
 export type BusyView =
-  | { readonly kind: 'hold'; readonly label: string; readonly progress: number }
-  | { readonly kind: 'minigame'; readonly game: GameKind; readonly token: number }
+  | { readonly kind: 'hold'; readonly act: ActKind; readonly label: string; readonly progress: number }
+  | { readonly kind: 'minigame'; readonly game: GameKind; readonly token: number; readonly label: string }
   | { readonly kind: 'slack'; readonly mode: SlackMode };
 
 export interface YouView {
@@ -84,6 +95,12 @@ export interface YouView {
   readonly stage: Stage;
   /** True while the boss or HR is running after you. */
   readonly chased: boolean;
+  /** Sitting on the train or in the shuttle: the camera drops and you stay put. */
+  readonly seated: boolean;
+  /** The train, lift or van you are in has set off. */
+  readonly rolling: boolean;
+  /** Punctuality is settled: the morning countdown no longer applies. */
+  readonly clockedIn: boolean;
   readonly spawn: { readonly seq: number; readonly x: number; readonly z: number; readonly yaw: number };
 }
 
@@ -91,6 +108,8 @@ export interface RankRow {
   readonly id: string;
   readonly name: string;
   readonly kpi: number;
+  /** KPI earned since this morning: the race that ends the day. */
+  readonly today: number;
   readonly warnings: number;
   readonly fired: boolean;
   readonly promoted: boolean;
@@ -119,12 +138,16 @@ export interface Snapshot {
   readonly traps: readonly { readonly id: string; readonly x: number; readonly z: number }[];
   readonly event: { readonly type: EventKind; readonly timeLeft: number; readonly repairs: number } | null;
   readonly ranking: readonly RankRow[];
+  /** Department goal everyone works towards together. */
+  readonly okr: { readonly done: number; readonly goal: number };
+  /** The day ends when the best earner of the day reaches `target`. */
+  readonly dayGoal: { readonly target: number; readonly best: number; readonly leader: string };
   readonly you: YouView;
 }
 
 export type ServerMsg =
   | Snapshot
-  | { readonly t: 'joined'; readonly id: string; readonly code: string }
+  | { readonly t: 'joined'; readonly id: string; readonly code: string; readonly key: string }
   | { readonly t: 'error'; readonly text: string }
   | { readonly t: 'toast'; readonly text: string; readonly tone: Tone };
 
@@ -140,7 +163,9 @@ export type Command =
 export type ClientMsg =
   | Command
   | { readonly t: 'create'; readonly name: string }
-  | { readonly t: 'join'; readonly name: string; readonly code: string };
+  | { readonly t: 'join'; readonly name: string; readonly code: string }
+  /** Take your seat back after a dropped connection; `key` was issued with `joined`. */
+  | { readonly t: 'rejoin'; readonly code: string; readonly id: string; readonly key: string };
 
 const ROOM_CODE = /^\d{4}$/;
 const MAX_TARGET_LENGTH = 40;
@@ -154,6 +179,8 @@ export function cleanName(raw: string): string {
 }
 
 /** Validate an untrusted client message. Returns null when malformed. */
+const MAX_KEY_LENGTH = 64;
+
 export function parseClientMsg(raw: string): ClientMsg | null {
   let data: unknown;
   try {
@@ -180,6 +207,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       return SHOP.some((i) => i.id === m.item) ? { t: 'buy', item: m.item as ShopItemId } : null;
     case 'create':
       return isStr(m.name, 64) ? { t: 'create', name: cleanName(m.name) } : null;
+    case 'rejoin':
+      return typeof m.code === 'string' && ROOM_CODE.test(m.code) && isStr(m.id, MAX_TARGET_LENGTH) && isStr(m.key, MAX_KEY_LENGTH) ? { t: 'rejoin', code: m.code, id: m.id, key: m.key } : null;
     case 'join':
       return isStr(m.name, 64) && typeof m.code === 'string' && ROOM_CODE.test(m.code)
         ? { t: 'join', name: cleanName(m.name), code: m.code }

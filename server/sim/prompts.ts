@@ -1,5 +1,7 @@
 import {
+  ASSIST_REWARD,
   BRIBE_RANGE,
+  FACE_TO_FACE_RANGE,
   INTERACT_RANGE,
   REPORT_HALF_ANGLE,
   REPORT_RANGE,
@@ -13,10 +15,11 @@ import { ITEM_NAMES } from '../../shared/tasks.ts';
 import { SIGHT_BLOCKERS, STATIONS } from '../../shared/world.ts';
 import type { Station } from '../../shared/world.ts';
 import { commuteOptions } from './commute.ts';
+import { canSee } from './travel.ts';
 import { rivalryPrompts } from './rivalry.ts';
 import { activePlayers, ownDeskId } from './state.ts';
 import type { GameState, Player } from './state.ts';
-import { workAt } from './tasks.ts';
+import { NPC_TARGET, currentStep, workAt } from './tasks.ts';
 
 type Option = Omit<Prompt, 'key'>;
 
@@ -40,6 +43,7 @@ export function facingPlayer(s: GameState, p: Player, range: number, halfAngle: 
   const seen = activePlayers(s).filter(
     (o) =>
       o.id !== p.id &&
+      canSee(p, o) &&
       dist(o, p) <= range &&
       Math.abs(angleDiff(yawTo(p, o), p.yaw)) <= halfAngle &&
       hasLineOfSight(p, o),
@@ -51,17 +55,31 @@ export function facingPlayer(s: GameState, p: Player, range: number, halfAngle: 
 const stallTaken = (s: GameState, stationId: string): boolean =>
   activePlayers(s).some((o) => o.busy?.kind === 'slack' && o.busy.target === stationId);
 
+/** Someone else waiting at this station for a second pair of hands. */
+export function liftWaiting(s: GameState, p: Player, st: Station): Player | null {
+  return (
+    activePlayers(s).find((o) => {
+      if (o.id === p.id || o.busy?.kind !== 'hold' || o.busy.act !== 'work' || o.busy.target !== st.id) return false;
+      return (workAt(o, st)?.step.crew ?? 1) > 1;
+    }) ?? null
+  );
+}
+
 function workOptions(p: Player, st: Station, printerBroken: boolean): Option[] {
   const job = workAt(p, st);
   if (!job) return [];
   if (st.type === 'printer' && printerBroken) return [option('work', st.id, '打印机卡纸了，先修好', true)];
-  if (job.step.gives && p.carrying) return [option('work', st.id, `${job.step.verb}（手上拿着东西）`, true)];
+  if (job.step.gives && p.carrying && p.carrying.taskUid !== job.task.uid) return [option('work', st.id, `${job.step.verb}（手上拿着东西）`, true)];
   return [option('work', st.id, job.step.verb)];
 }
 
 function stationOptions(s: GameState, p: Player, st: Station): Option[] {
+  // Until work starts, the office's own stations are closed: only the commute is on offer.
+  if (p.stage !== 'work') return commuteOptions(s, p, st);
   const out: Option[] = [];
   if (p.carrying?.dest === st.id) out.push(option('deliver', st.id, `上交${ITEM_NAMES[p.carrying.kind]}`));
+  const lifter = liftWaiting(s, p, st);
+  if (lifter) out.push(option('assist', st.id, `帮 ${lifter.name} 搭把手（KPI +${ASSIST_REWARD}）`));
   out.push(...workOptions(p, st, s.printer.broken));
   switch (st.type) {
     case 'printer':
@@ -96,10 +114,23 @@ function stationOptions(s: GameState, p: Player, st: Station): Option[] {
   return out;
 }
 
+/** Stages done by walking up to a colleague, such as getting the director's signature. */
+function faceToFace(s: GameState, p: Player): Prompt[] {
+  for (const task of p.tasks) {
+    const step = currentStep(task);
+    const npc = step?.npc ? s.npcs.find((n) => n.id === step.npc) : undefined;
+    if (step && npc && dist(npc, p) <= FACE_TO_FACE_RANGE) return [{ key: 'E', ...option('work', `${NPC_TARGET}${npc.id}`, step.verb) }];
+  }
+  return [];
+}
+
 function ghostPrompts(s: GameState, p: Player): Prompt[] {
   const out: Prompt[] = [];
   const st = nearestStation(p);
   if (st?.type === 'printer' && !s.printer.broken) out.push({ key: 'E', ...option('jam', st.id, '弄坏打印机') });
+  const suspect = facingPlayer(s, p, REPORT_RANGE, REPORT_HALF_ANGLE);
+  const canCatch = s.time >= p.reportReadyAt;
+  if (suspect) out.push({ key: 'R', ...option('catch', suspect.id, canCatch ? `监工：抓 ${suspect.name} 摸鱼` : '刚抓过人，歇一会', !canCatch) });
   const ready = s.time >= p.summonReadyAt;
   out.push({ key: 'Q', ...option('summon', '', ready ? '匿名举报：把总监叫到这里' : '匿名举报冷却中', !ready) });
   return out;
@@ -117,7 +148,9 @@ export function getPrompts(s: GameState, p: Player): Prompt[] {
     .map((o, i) => ({ key: stationKeys[i], ...o }));
   const fFree = (): boolean => !out.some((o) => o.key === 'F');
 
-  out.push(...rivalryPrompts(s, p));
+  if (!out.some((o) => o.key === 'E')) out.push(...faceToFace(s, p));
+  // Packed into a lift or belted into the van, there is no room for dirty tricks.
+  if (p.stage !== 'lift' && p.stage !== 'van') out.push(...rivalryPrompts(s, p));
   // Before clocking in there is nobody to report, rob or hide from.
   if (p.stage !== 'work') return out;
 

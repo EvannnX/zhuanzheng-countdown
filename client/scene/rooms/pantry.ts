@@ -1,27 +1,80 @@
 import type * as THREE from 'three';
 import { ball, box, cyl, glass, glow, group, pick, rbox, shiny, textPlane, turn } from '../kit.ts';
 import { DARK, STEEL, WHITE, WOOD, at, bin, mug, plant, stool, waterDispenser } from '../parts.ts';
-import { poster } from '../shell.ts';
+import { bagel, deliCup, paperBag } from '../nycParts.ts';
+import { hang, poster } from '../shell.ts';
 import type { Builder, RoomArt } from './types.ts';
 
 const TOP_Y = 0.92;
 const SNACKS = ['#ef4444', '#22c55e', '#3b82f6', '#f59e0b', '#a855f7', '#ec4899', '#14b8a6'];
 
-function espressoMachine(): THREE.Group {
+const STAINLESS = '#c5cad0';
+
+/** Glass diner carafe, half full; the orange-collared one is decaf. */
+const carafe = (decaf: boolean): THREE.Group =>
+  group(
+    0, 0, 0,
+    cyl(0.07, 0.085, 0.12, glass('#e7f2f7', 0.45), 0, 0.06, 0, 14),
+    cyl(0.062, 0.078, 0.07, '#3b2415', 0, 0.04, 0, 14),
+    cyl(0.05, 0.07, 0.03, glass('#e7f2f7', 0.45), 0, 0.135, 0, 14),
+    cyl(0.052, 0.052, 0.022, decaf ? shiny('#f97316') : shiny(DARK), 0, 0.158, 0, 14),
+    rbox(0.02, 0.1, 0.03, decaf ? shiny('#f97316') : shiny(DARK), 0.095, 0.1, 0, 0.008),
+  );
+
+/** Twin-warmer drip brewer, the kind every deli runs all day. Origin on the counter. */
+function dripBrewer(): THREE.Group {
   return group(
     0, TOP_Y, 0,
-    rbox(0.46, 0.44, 0.4, shiny('#b91c1c'), 0, 0.24, -0.04, 0.03),
-    rbox(0.48, 0.05, 0.44, shiny('#d1d5db'), 0, 0.485, -0.04, 0.015),
-    box(0.4, 0.03, 0.2, shiny('#374151'), 0, 0.03, 0.18),
-    box(0.36, 0.005, 0.16, '#111827', 0, 0.047, 0.18),
-    cyl(0.03, 0.035, 0.07, shiny(DARK), -0.09, 0.26, 0.19, 10),
-    cyl(0.03, 0.035, 0.07, shiny(DARK), 0.09, 0.26, 0.19, 10),
-    turn(cyl(0.008, 0.008, 0.2, shiny(STEEL), 0.2, 0.2, 0.2, 6), 0, 0, 0.3),
-    box(0.2, 0.08, 0.01, glow('#bfdbfe'), 0, 0.4, 0.162),
-    ...[-0.12, 0, 0.12].map((x) => cyl(0.035, 0.03, 0.06, WHITE, x, 0.54, -0.06, 10)),
-    cyl(0.04, 0.035, 0.08, WHITE, -0.09, 0.09, 0.19, 12),
+    rbox(0.38, 0.05, 0.4, shiny(STAINLESS), 0, 0.025, 0, 0.012),
+    rbox(0.38, 0.5, 0.12, shiny(STAINLESS), 0, 0.3, -0.14, 0.012),
+    rbox(0.38, 0.12, 0.4, shiny(STAINLESS), 0, 0.5, 0, 0.012),
+    cyl(0.09, 0.09, 0.012, DARK, -0.09, 0.056, 0.06, 16),
+    cyl(0.09, 0.09, 0.012, DARK, 0.09, 0.568, 0.02, 16),
+    // brew basket under the spray head, with the pot beneath it
+    cyl(0.085, 0.06, 0.1, DARK, -0.09, 0.39, 0.06, 14),
+    box(0.03, 0.02, 0.1, DARK, -0.09, 0.4, 0.17),
+    group(-0.09, 0.062, 0.06, carafe(false)),
+    group(0.09, 0.574, 0.02, turn(carafe(true), 0.6)),
+    box(0.1, 0.03, 0.004, '#111827', 0.09, 0.5, 0.202),
+    ...[0.06, 0.12].map((x, i) => box(0.022, 0.03, 0.01, glow(i === 0 ? '#ef4444' : '#f59e0b'), x, 0.5, 0.204)),
+    cyl(0.07, 0.07, 0.16, glass('#bfdbfe', 0.5), 0.1, 0.2, 0.04, 12),
   );
 }
+
+/** Wicker basket of bagels with the tub of cream cheese and a knife. */
+function bagelBasket(): THREE.Group {
+  const pile = [[-0.08, 0.05, -0.03], [0.07, 0.05, -0.04], [0, 0.05, 0.07], [-0.02, 0.095, 0], [0.06, 0.1, 0.05]];
+  return group(
+    0, TOP_Y, 0,
+    cyl(0.18, 0.15, 0.06, '#b98a55', 0, 0.03, 0, 16),
+    cyl(0.165, 0.165, 0.01, '#f5e9d3', 0, 0.056, 0, 16),
+    ...pile.map(([x, y, z], i) => turn(group(x, y, z, bagel(i % 2 === 0)), i * 1.3, (i % 3) * 0.2 - 0.2)),
+    group(0.27, 0, 0.05, cyl(0.06, 0.05, 0.06, WHITE, 0, 0.03, 0, 12), cyl(0.052, 0.052, 0.006, '#fdf6e3', 0, 0.058, 0, 12), turn(box(0.16, 0.006, 0.018, shiny(STEEL), 0.02, 0.066, 0), 0.5)),
+  );
+}
+
+/** Four-slot toaster with two bagel halves up. */
+const toaster = (): THREE.Group =>
+  group(
+    0, TOP_Y, 0,
+    rbox(0.3, 0.19, 0.26, shiny(STAINLESS), 0, 0.105, 0, 0.03),
+    ...[-0.07, 0.07].flatMap((x) => [-0.05, 0.05].map((z) => box(0.1, 0.006, 0.03, DARK, x, 0.2, z))),
+    ...[-0.05, 0.05].map((z) => cyl(0.045, 0.045, 0.02, '#c98b45', -0.07, 0.225, z, 12).rotateX(Math.PI / 2)),
+    ...[-0.07, 0.07].map((x) => box(0.03, 0.04, 0.02, DARK, x, 0.12, 0.135)),
+    cyl(0.02, 0.02, 0.012, DARK, 0, 0.06, 0.135, 8).rotateX(Math.PI / 2),
+  );
+
+/** Sleeve of paper cups, lids, sugar and stirrers. */
+const cupStation = (): THREE.Group =>
+  group(
+    0, TOP_Y, 0,
+    ...[0, 1, 2, 3, 4].map((i) => cyl(0.042, 0.034, 0.05, i % 2 === 0 ? '#2f6fc4' : WHITE, -0.06, 0.025 + i * 0.045, 0, 12)),
+    group(0.06, 0, 0.06, deliCup()),
+    rbox(0.12, 0.07, 0.1, DARK, 0.06, 0.035, -0.08, 0.01),
+    ...[-0.03, 0, 0.03].map((x, i) => box(0.022, 0.05, 0.05, ['#f8fafc', '#f9a8d4', '#fde68a'][i], 0.06 + x, 0.075, -0.08)),
+    cyl(0.03, 0.03, 0.1, glass('#ffffff', 0.4), 0.17, 0.05, 0, 10),
+    ...[-0.008, 0.008].map((x) => cyl(0.003, 0.003, 0.15, '#b98a55', 0.17 + x, 0.09, 0, 4)),
+  );
 
 const counter: Builder = (w, d) => {
   const doors = Math.round(w / 0.6);
@@ -36,20 +89,23 @@ const counter: Builder = (w, d) => {
     // upper cabinets and tiled splashback
     rbox(w, 0.62, 0.36, WHITE, 0, 1.95, -d / 2 + 0.18, 0.012),
     ...Array.from({ length: doors }, (_, i) => box(unit - 0.03, 0.56, 0.012, '#f1f5f9', -w / 2 + unit * (i + 0.5), 1.95, -d / 2 + 0.364)),
-    box(w, 0.72, 0.012, shiny('#fde8c8'), 0, 1.29, -d / 2 + 0.008),
+    box(w, 0.72, 0.012, shiny('#f7f5ee'), 0, 1.29, -d / 2 + 0.008),
+    ...[1.11, 1.29, 1.47].map((y) => box(w, 0.006, 0.004, '#c9c5ba', 0, y, -d / 2 + 0.016)),
     box(w - 0.2, 0.02, 0.04, glow('#fff7d6'), 0, 1.63, -d / 2 + 0.3),
     // sink
     box(0.5, 0.012, 0.36, shiny('#9ca3af'), sinkX, TOP_Y + 0.004, 0.02),
     box(0.42, 0.012, 0.28, '#4b5563', sinkX, TOP_Y + 0.007, 0.02),
     cyl(0.014, 0.014, 0.22, shiny(STEEL), sinkX, TOP_Y + 0.11, -0.2, 8),
     turn(cyl(0.012, 0.012, 0.16, shiny(STEEL), sinkX, TOP_Y + 0.22, -0.13, 8), 0, Math.PI / 2),
-    // appliances: the espresso machine sits where the coffee station is
-    group(1, 0, 0, espressoMachine()),
+    // appliances: the drip brewer sits where the coffee station is, bagels and cups beside it
+    group(1, 0, -0.02, dripBrewer()),
+    group(0.3, 0, 0.05, bagelBasket()),
+    group(-0.93, 0, -0.04, toaster()),
+    group(1.46, 0, 0.02, cupStation()),
     group(-1.35, TOP_Y, -0.06, rbox(0.5, 0.3, 0.36, shiny('#e5e7eb'), 0, 0.15, 0, 0.02), box(0.32, 0.2, 0.01, '#111827', -0.06, 0.15, 0.182), box(0.08, 0.2, 0.01, '#374151', 0.19, 0.15, 0.182), box(0.02, 0.2, 0.03, shiny(STEEL), 0.12, 0.15, 0.195)),
     group(-2.05, TOP_Y, 0, cyl(0.07, 0.085, 0.2, shiny('#e5e7eb'), 0, 0.1, 0, 14), cyl(0.03, 0.05, 0.03, DARK, 0, 0.215, 0, 10), rbox(0.02, 0.14, 0.05, DARK, 0.1, 0.12, 0, 0.008)),
-    group(1.75, TOP_Y, -0.05, cyl(0.01, 0.01, 0.3, WOOD, 0, 0.15, 0, 6), cyl(0.09, 0.09, 0.015, WOOD, 0, 0.008, 0, 12), ...[0, 1, 2, 3].map((i) => turn(group(0, 0.12 + (i % 2) * 0.1, 0, group(0.1, 0, 0, mug(pick(['#ef4444', '#3b82f6', '#f59e0b', '#22c55e'], i)))), (i * Math.PI) / 2))),
-    group(2.2, TOP_Y, 0, plant('bush', 0.4, '#fef3c7')),
-    group(0.35, TOP_Y, 0.05, cyl(0.045, 0.045, 0.14, glass('#fde68a', 0.7), 0, 0.07, 0, 12), cyl(0.047, 0.047, 0.02, shiny('#b45309'), 0, 0.15, 0, 12)),
+    group(1.88, TOP_Y, -0.08, cyl(0.01, 0.01, 0.3, WOOD, 0, 0.15, 0, 6), cyl(0.09, 0.09, 0.015, WOOD, 0, 0.008, 0, 12), ...[0, 1, 2, 3].map((i) => turn(group(0, 0.12 + (i % 2) * 0.1, 0, group(0.1, 0, 0, mug(pick(['#ef4444', '#3b82f6', '#f59e0b', '#22c55e'], i)))), (i * Math.PI) / 2))),
+    group(2.25, TOP_Y, 0, plant('bush', 0.4, '#fef3c7')),
   ];
 };
 
@@ -133,6 +189,8 @@ function decor(): THREE.Object3D[] {
     pendant(8.3, 25.6),
     at(7.8, 27.3, 0, plant('tree', 0.95)),
     at(3.2, 18.2, 0, bin('#9ca3af')),
+    hang(textPlane('TODAY 今日供应\nBAGEL 贝果 · LOX 熏鲑鱼\nDRIP COFFEE 滴滤咖啡\n—— 以上均已被吃完 ——', 1.5, 0.95, { bg: '#18181b', fg: '#f8f4e3', border: '#b98a55' }), 'w', 0, 26.75, 1.75),
+    at(6.25, 21.75, 0.4, group(0, 0.78, 0, paperBag())),
   ];
 }
 

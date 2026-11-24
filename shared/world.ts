@@ -14,7 +14,12 @@ export type RoomId =
   | 'home'
   | 'street'
   | 'subway'
-  | 'warehouse';
+  | 'warehouse'
+  | 'train'
+  | 'plaza'
+  | 'towerLobby'
+  | 'lift'
+  | 'van';
 
 export interface Room extends Rect {
   readonly id: RoomId;
@@ -27,7 +32,7 @@ export interface Room extends Rect {
  * The game spans five separate places. They share one coordinate space but sit
  * hundreds of metres apart, so only the one you are standing in is ever visible.
  */
-export type AreaId = 'office' | 'home' | 'street' | 'subway' | 'warehouse';
+export type AreaId = 'office' | 'home' | 'street' | 'subway' | 'warehouse' | 'train' | 'plaza' | 'lift' | 'van';
 export interface Area extends Rect {
   readonly id: AreaId;
   readonly name: string;
@@ -38,8 +43,28 @@ export const AREAS: readonly Area[] = [
   { id: 'street', name: '上班路上', x0: 100, z0: 600, x1: 132, z1: 640 },
   { id: 'subway', name: '地铁站', x0: 200, z0: 600, x1: 228, z1: 610 },
   { id: 'warehouse', name: '外派 · 物流仓库', x0: 300, z0: 600, x1: 340, z1: 624 },
+  { id: 'train', name: '地铁车厢', x0: 400, z0: 600, x1: 418, z1: 602.8 },
+  // The avenue, the forecourt and the tower's ground-floor lobby behind the glass.
+  { id: 'plaza', name: '公司楼下', x0: 500, z0: 600, x1: 530, z1: 641 },
+  { id: 'lift', name: '电梯里', x0: 600, z0: 600, x1: 612.8, z1: 602.4 },
+  { id: 'van', name: '外派班车', x0: 700, z0: 600, x1: 702.2, z1: 605.2 },
+];
+/** z of the tower's glass front, and the gap in it filled by the revolving door. */
+export const TOWER_FACADE_Z = 627;
+export const TOWER_DOOR = { from: 513.5, to: 516.5 } as const;
+/** The ground-floor lobby behind the facade. */
+export const TOWER_LOBBY: Rect = { x0: 503, z0: TOWER_FACADE_Z, x1: 527, z1: 641 };
+/** Two lift cars side by side in nowhere: one for rides up, one for rides down. */
+export const LIFT_CARS: readonly Rect[] = [
+  { x0: 600, z0: 600, x1: 602.8, z1: 602.4 },
+  { x0: 610, z0: 600, x1: 612.8, z1: 602.4 },
 ];
 export const areaAt = (p: Vec): AreaId | null => AREAS.find((a) => inRect(a, p))?.id ?? null;
+/** The place a point belongs to, even when it lies outside every footprint (scenery around it). */
+export function nearestArea(p: Vec): AreaId {
+  const gap = (a: Area): number => Math.hypot(Math.max(a.x0 - p.x, 0, p.x - a.x1), Math.max(a.z0 - p.z, 0, p.z - a.z1));
+  return AREAS.reduce((best, a) => (gap(a) < gap(best) ? a : best)).id;
+}
 export const areaById = (id: AreaId): Area => AREAS.find((a) => a.id === id) as Area;
 export const WALL_HEIGHT = 3;
 export const RAIL_HEIGHT = 1.1;
@@ -59,6 +84,11 @@ export const ROOMS: readonly Room[] = [
   { id: 'street', name: '街道', floor: '#b9bec4', x0: 100, z0: 600, x1: 132, z1: 640, outdoor: true },
   { id: 'subway', name: '站台', floor: '#d9dde2', x0: 200, z0: 600, x1: 228, z1: 610 },
   { id: 'warehouse', name: '仓库', floor: '#aeb4ba', x0: 300, z0: 600, x1: 340, z1: 624 },
+  { id: 'train', name: '车厢', floor: '#3b3f46', x0: 400, z0: 600, x1: 418, z1: 602.8 },
+  { id: 'plaza', name: '大街', floor: '#c3c7cc', x0: 500, z0: 600, x1: 530, z1: TOWER_FACADE_Z, outdoor: true },
+  { id: 'towerLobby', name: '一楼大堂', floor: '#e7e2d6', ...TOWER_LOBBY },
+  ...LIFT_CARS.map((car) => ({ id: 'lift' as const, name: '电梯', floor: '#4b5563', ...car })),
+  { id: 'van', name: '班车', floor: '#374151', x0: 700, z0: 600, x1: 702.2, z1: 605.2 },
 ];
 
 export const roomAt = (p: Vec): RoomId | null => ROOMS.find((r) => inRect(r, p))?.id ?? null;
@@ -127,10 +157,25 @@ export const PLATFORM_EDGE_Z = 606;
 export const WALLS: readonly WallRect[] = [
   ...enclose(areaById('home')),
   ...enclose(areaById('street'), true),
-  ...enclose(areaById('subway')),
+  // Subway: same collision as enclose(), but the track-side part of each end wall is not drawn (tunnel mouths).
+  ...wallLine('z', 600, 200, 228),
+  ...wallLine('z', 610, 200, 228),
+  ...[200, 228].flatMap((x) => [...wallLine('x', x, 600, PLATFORM_EDGE_Z), ...wallLine('x', x, PLATFORM_EDGE_Z, 610, false, true)]),
   // Collision only: the platform edge is open, as on a real platform.
   ...wallLine('z', PLATFORM_EDGE_Z, 200, 228, true, true),
   ...enclose(areaById('warehouse')),
+  ...enclose(areaById('train'), true),
+  // The avenue and forecourt have invisible edges; the facade leaves a gap for the revolving door.
+  ...wallLine('z', 600, 500, 530, false, true),
+  ...wallLine('x', 500, 600, TOWER_FACADE_Z, false, true),
+  ...wallLine('x', 530, 600, TOWER_FACADE_Z, false, true),
+  ...wallLine('z', TOWER_FACADE_Z, 500, TOWER_DOOR.from, false, true),
+  ...wallLine('z', TOWER_FACADE_Z, TOWER_DOOR.to, 530, false, true),
+  ...wallLine('x', TOWER_LOBBY.x0, TOWER_FACADE_Z, TOWER_LOBBY.z1),
+  ...wallLine('x', TOWER_LOBBY.x1, TOWER_FACADE_Z, TOWER_LOBBY.z1),
+  ...wallLine('z', TOWER_LOBBY.z1, TOWER_LOBBY.x0, TOWER_LOBBY.x1),
+  ...LIFT_CARS.flatMap((car) => enclose(car, true)),
+  ...enclose(areaById('van'), true),
   ...wallLine('z', 0, 0, 40),
   ...wallLine('z', 28, 0, 40),
   ...wallLine('x', 0, 0, 28),
@@ -211,7 +256,16 @@ const COLLEAGUE_DESKS: readonly { x: number; z: number; face: Face }[] = ROW_SPI
 });
 
 export const BAY_XS = [310, 320, 330];
+/** Free seats on the morning train: there are never enough. */
+export const SEAT_XS = [404.35, 406.85, 411.15, 413.65];
 const RACK_XS = [312, 320, 328];
+
+/** The lobby turnstile line: pedestals with walk-through lanes between them. */
+export const LOBBY_GATE_Z = 634;
+const LOBBY_GATE_XS = [511.8, 513.4, 515, 516.6, 518.2];
+const LOBBY_LANE_XS = LOBBY_GATE_XS.slice(1).map((x) => x - 0.8);
+/** Doors of the ground-floor lift bank, on the lobby's back wall. */
+export const LIFT_DOOR_XS = [510, 515, 520];
 
 const HOME_WALL_T = 0.16;
 /** Doorways (from, to) in the flat's inner walls; the client hangs headers over them. */
@@ -269,11 +323,30 @@ const AWAY_PROPS: readonly Prop[] = [
   prop('fareMachine', 203.5, 600.5, 0.9, 0.7),
   prop('platformBench', 210, 600.6, 2.4, 0.7),
   prop('platformBench', 218, 600.6, 2.4, 0.7),
+  // train car: benches down both sides, the south one is already full
+  ...[[400.8, 1], [405.6, 5], [412.4, 5], [417.2, 1]].flatMap(([x, w]) => [prop('carBench', x, 600.35, w, 0.5), prop('carBench', x, 602.45, w, 0.5, 'n')]),
+  // the avenue in front of the tower: subway exit on the far sidewalk, whale and shuttle on the near one
+  prop('subwayEntrance', 515, 601.4, 6, 2.4),
+  prop('whaleStatue', 508.5, 622.5, 3.2, 3.2),
+  ...[503.2, 526.8].flatMap((x) => [602.6, 624.6].map((z) => prop('planter', x, z, 1.6, 1.6))),
+  prop('shuttleVan', 523.6, 619.5, 5.2, 2.2, 'e'),
+  // glass cheeks of the revolving-door drum
+  ...[TOWER_DOOR.from, TOWER_DOOR.to].map((x) => prop('doorJamb', x, TOWER_FACADE_Z, 0.12, 1.7)),
+  // ground-floor lobby: front desk, turnstile line, waiting bench
+  prop('frontDesk', 507, 630.6, 1.1, 3.6, 'e'),
+  ...LOBBY_GATE_XS.map((x) => prop('badgeGate', x, LOBBY_GATE_Z, 0.3, 1.3)),
+  prop('lobbyRail', 507.375, LOBBY_GATE_Z, 8.55, 0.12),
+  prop('lobbyRail', 522.625, LOBBY_GATE_Z, 8.55, 0.12),
+  prop('lobbyBench', 525.9, 630.6, 0.8, 2.6, 'w'),
+  prop('lobbyPlant', 504, 628.1, 0.7, 0.7),
+  prop('lobbyPlant', 526, 628.1, 0.7, 0.7),
+  prop('lobbyPlant', 504, 640, 0.7, 0.7),
+  prop('lobbyPlant', 526, 640, 0.7, 0.7),
   // warehouse
   prop('conveyor', 320, 601.3, 26, 1.4),
   ...RACK_XS.flatMap((x) => [608, 616].map((z) => prop('rack', x, z, 6, 1.4))),
   ...BAY_XS.map((x) => prop('bay', x, 623, 4, 1.6, 'n')),
-  prop('packDesk', 338.6, 606.5, 1, 2.2, 'w'),
+  prop('packDesk', 338.6, 608.6, 1, 2.2, 'w'),
   prop('packDesk', 338.6, 615.5, 1, 2.2, 'w'),
   prop('sofa', 338.9, 621.3, 0.9, 2.4, 'w'),
   prop('dispenser', 301, 601, 0.45, 0.45),
@@ -375,7 +448,13 @@ export type StationType =
   | 'labelDesk'
   | 'stockPc'
   | 'waterBar'
-  | 'client';
+  | 'client'
+  | 'seat'
+  | 'badge'
+  | 'liftCall'
+  | 'liftDown'
+  | 'shuttle'
+  | 'boxpile';
 
 export interface Station extends Vec {
   readonly id: string;
@@ -413,11 +492,16 @@ const AWAY_STATIONS: readonly Station[] = [
   ...TRAIN_DOOR_XS.map((x, i) => station(`traindoor${i}`, 'trainDoor', '车门', '🚪', x, 605.2, x, 606)),
   station('conveyor', 'conveyor', '传送带', '📦', 320, 602.8, 320, 601.3),
   ...BAY_XS.map((x, i) => station(`bay${'ABC'[i]}`, 'bay', `${'ABC'[i]} 区货位`, '🅿️', x, 621.4, x, 623)),
-  station('labeldesk', 'labelDesk', '打单台', '🏷️', 337.4, 606.5, 338.6, 606.5),
+  station('labeldesk', 'labelDesk', '打单台', '🏷️', 337.4, 608.6, 338.6, 608.6),
   station('stockpc', 'stockPc', '盘点电脑', '🖥️', 337.4, 615.5, 338.6, 615.5),
   station('waterbar', 'waterBar', '饮水机', '🚰', 301.7, 601.8, 301, 601),
   station('client', 'client', '甲方王总', '🤵', 337.6, 621.3, 338.9, 621.3),
-  station('boxpile', 'bench', '纸箱堆', '🌤️', 303.4, 617, 302.2, 617),
+  ...SEAT_XS.map((x, i) => station(`seat${i}`, 'seat', '座位', '💺', x, 600.95, x, 600.45)),
+  ...LOBBY_LANE_XS.map((x, i) => station(`badge${i}`, 'badge', '闸机', '🪪', x, LOBBY_GATE_Z - 0.9, x, LOBBY_GATE_Z)),
+  ...LIFT_DOOR_XS.map((x, i) => station(`lift${i}`, 'liftCall', `${i + 1} 号电梯`, '🛗', x, TOWER_LOBBY.z1 - 1.1, x + 1.07, TOWER_LOBBY.z1 - 0.3)),
+  station('lift12', 'liftDown', '下行电梯', '🛗', 34.5, 26.9, 34.5, 27.7),
+  station('shuttle', 'shuttle', '外派班车', '🚐', 523.6, 621.3, 523.6, 619.5),
+  station('boxpile', 'boxpile', '纸箱堆', '📦', 303.4, 617, 302.2, 617),
 ];
 
 export const STATIONS: readonly Station[] = [
@@ -458,6 +542,21 @@ const EAST = Math.PI / 2;
 export const homeSpawn = (index: number): Spawn => ({ x: 1.1 + (index % DESK_COUNT) * 1.55, z: 602.2, yaw: SOUTH });
 export const streetSpawn = (index: number): Spawn => ({ x: 106 + (index % DESK_COUNT) * 2.4, z: 601.6, yaw: SOUTH });
 export const subwaySpawn = (index: number): Spawn => ({ x: 201.5 + (index % 4) * 1.1, z: 601.6 + Math.floor((index % DESK_COUNT) / 4) * 1.4, yaw: EAST });
+/** Standing room down the middle of the car. */
+export const trainSpawn = (index: number): Spawn => ({ x: 402 + (index % DESK_COUNT) * 1.9, z: 601.4, yaw: EAST });
+/** Top of the subway stairs, facing the tower across the plaza. */
+export const plazaSpawn = (index: number): Spawn => ({ x: 509.5 + (index % DESK_COUNT) * 1.5, z: 604.2, yaw: SOUTH });
+/** Packed into a lift car, facing the doors. */
+export const liftSpawn = (index: number, down: boolean): Spawn => ({ x: LIFT_CARS[down ? 1 : 0].x0 + 0.5 + (index % 4) * 0.6, z: 601 + Math.floor((index % DESK_COUNT) / 4) * 0.7, yaw: NORTH });
+/** Stepping out of the lift on the 12th floor to be told about the away day. */
+export const dispatchSpawn = (index: number): Spawn => ({ x: 32.8 + (index % 4) * 1.1, z: 25.9 - Math.floor((index % DESK_COUNT) / 4), yaw: NORTH });
+/** Back down in the ground-floor lobby, facing the street. */
+export const lobbySpawn = (index: number): Spawn => ({ x: 511.5 + (index % DESK_COUNT) * 0.95, z: 638.6, yaw: NORTH });
+/** Seat 0 is the driver's; the rest are the front passenger and three rows of two. */
+export const vanSeat = (seat: number): Spawn => {
+  const i = seat % DESK_COUNT;
+  return i < 2 ? { x: 700.6 + i, z: 600.95, yaw: NORTH } : { x: 700.55 + (i % 2) * 1.1, z: 602.3 + (Math.floor(i / 2) - 1) * 1.1, yaw: NORTH };
+};
 export const warehouseSpawn = (index: number): Spawn => ({ x: 301.6 + (index % 4) * 1.1, z: 608.2 + Math.floor((index % DESK_COUNT) / 4) * 1.2, yaw: EAST });
 export const FACING_NORTH = NORTH;
 

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { textured } from './surface.ts';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { ItemKind } from '../../shared/tasks.ts';
@@ -92,30 +93,49 @@ export const pick = <T,>(items: readonly T[], seed: number): T => items[Math.abs
 
 /**
  * Bake a static tree into one mesh per shared material. Everything that is not
- * mergeable (textured planes, sprites) is carried over untouched.
+ * mergeable (textured planes, sprites) is carried over untouched. `cellOf` names
+ * the place each piece belongs to; pieces are grouped by it.
  */
-export function mergeStatic(root: THREE.Object3D): THREE.Group {
+export function mergeStatic(root: THREE.Object3D, cellOf: (x: number, z: number) => string = () => ''): THREE.Group {
   root.updateMatrixWorld(true);
-  const buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
-  const loose: THREE.Object3D[] = [];
+  const buckets = new Map<string, { cell: string; material: THREE.Material; parts: THREE.BufferGeometry[] }>();
+  const loose: { cell: string; node: THREE.Object3D }[] = [];
+  const at = new THREE.Vector3();
   root.traverse((node) => {
+    if (!(node instanceof THREE.Mesh) && !(node instanceof THREE.Sprite)) return;
+    node.getWorldPosition(at);
+    const cell = cellOf(at.x, at.z);
     if (node instanceof THREE.Mesh && !Array.isArray(node.material) && node.material.userData.merge) {
       const flat = node.geometry.index ? node.geometry.toNonIndexed() : node.geometry.clone();
       flat.applyMatrix4(node.matrixWorld);
-      buckets.set(node.material, [...(buckets.get(node.material) ?? []), flat]);
-    } else if (node instanceof THREE.Mesh || node instanceof THREE.Sprite) {
-      loose.push(node);
+      const key = `${cell}|${node.material.uuid}`;
+      const bucket = buckets.get(key) ?? { cell, material: node.material as THREE.Material, parts: [] as THREE.BufferGeometry[] };
+      bucket.parts.push(flat);
+      buckets.set(key, bucket);
+    } else {
+      loose.push({ cell, node });
     }
   });
+  // One sub-group per cell, so a whole place can be switched off when the player is elsewhere.
   const out = new THREE.Group();
-  for (const [material, parts] of buckets) {
-    const merged = new THREE.Mesh(mergeGeometries(parts), material);
+  const cells = new Map<string, THREE.Group>();
+  const groupFor = (cell: string): THREE.Group => {
+    const hit = cells.get(cell);
+    if (hit) return hit;
+    const made = new THREE.Group();
+    made.name = cell;
+    cells.set(cell, made);
+    out.add(made);
+    return made;
+  };
+  for (const { cell, material, parts } of buckets.values()) {
+    const merged = new THREE.Mesh(mergeGeometries(parts), textured(material));
     merged.castShadow = !material.userData.noShadow;
     merged.receiveShadow = !material.userData.noShadow;
-    out.add(merged);
+    groupFor(cell).add(merged);
     for (const part of parts) part.dispose();
   }
-  for (const node of loose) out.attach(node);
+  for (const { cell, node } of loose) groupFor(cell).attach(node);
   return out;
 }
 

@@ -1,20 +1,36 @@
 import * as THREE from 'three';
-import { DOORS, ROOMS, WALLS, WALL_HEIGHT, roomName } from '../../shared/world.ts';
+import { LANES } from '../../shared/hazards.ts';
+import { DOORS, ROOMS, WALLS, WALL_HEIGHT, areaById, roomName } from '../../shared/world.ts';
 import type { Door, Room, RoomId } from '../../shared/world.ts';
 import { box, cyl, glass, glow, group, rbox, shiny, textPlane, turn } from './kit.ts';
 import type { Paint, TextStyle } from './kit.ts';
-import { carpet, ceilingGrid, ceramic, deck, terrazzo, wood } from './textures.ts';
+import { masonry } from './masonry.ts';
+import { carpet, ceilingGrid, ceramic, terrazzo, wood } from './textures.ts';
+import { checkerTile, concrete, rollerSlats, wornWood } from './texturesNyc.ts';
+import { DOCK_WIDTH, WALL_T, along, dockUnit, parapet, windowUnit } from './wallParts.ts';
+import type { Axis, Win } from './wallParts.ts';
 
 export const WALL = '#efe7d8';
-const FRAME = '#dfe5ea';
+const FRAME = '#2a2e35';
+/** Exposed slab over the loft-style rooms, and the plank deck over the warehouse trusses. */
+const LOFT: CeilingSpec = { color: '#d6d3cb', map: () => concrete('#d6d3cb', 44), tile: 4 };
+const TIMBER: CeilingSpec = { color: '#8a6d52', map: () => wood('#8a6d52', '#4a3524'), tile: 2.4 };
 const TRIM = '#8a6a4a';
 const BRAND = '#ff7a2f';
 const PLASTER = '#f6f1e7';
 const CORNICE = '#fbf8f1';
-const WALL_T = 0.2;
 const DOOR_TOP = 2.2;
 const LIGHT_SPACING = 4.5;
 const CEILING_PANEL = 0.6;
+const WAINSCOT_TRIM: Partial<Record<RoomId, string>> = { corridor: BRAND, pantry: '#262a30' };
+
+interface CeilingSpec {
+  readonly color: string;
+  readonly cornice?: boolean;
+  /** Exposed structure: an evenly lit texture (metres per repeat in `tile`) instead of flat paint. */
+  readonly map?: () => THREE.CanvasTexture;
+  readonly tile?: number;
+}
 
 interface Surface {
   readonly floor: () => THREE.CanvasTexture;
@@ -23,37 +39,34 @@ interface Surface {
   readonly baseboard: string;
   readonly wainscot?: { readonly color: Paint; readonly height: number };
   /** A plain painted ceiling instead of office grid panels, optionally with a cornice. */
-  readonly ceiling?: { readonly color: string; readonly cornice?: boolean };
+  readonly ceiling?: CeilingSpec;
 }
 
 const SURFACES: Record<RoomId, Surface> = {
-  office: { floor: () => carpet('#8d99a8', '#7f8b9b'), tile: 1.2, baseboard: '#5b6470' },
+  office: { floor: () => carpet('#737d8b', '#687280'), tile: 1.2, baseboard: '#3f4650', ceiling: LOFT },
   meeting: { floor: () => carpet('#5c7391', '#536985'), tile: 1.2, baseboard: '#3d4b5f', wainscot: { color: '#c7b299', height: 0.9 } },
   director: { floor: () => wood('#a8733f', '#5e3a1c'), tile: 1.6, baseboard: '#5a3519', wainscot: { color: '#7a4a2b', height: 0.9 } },
-  corridor: { floor: () => terrazzo('#e6e0d2'), tile: 2.4, baseboard: '#6b7280', wainscot: { color: '#e9e2d3', height: 0.9 } },
-  pantry: { floor: () => ceramic('#f1e3bd', '#c9b98f', 4), tile: 2, baseboard: '#b49a6a', wainscot: { color: shiny('#fff6dc'), height: 0.9 } },
-  print: { floor: () => terrazzo('#cdd3d9'), tile: 2.4, baseboard: '#5b6470' },
+  corridor: { floor: () => concrete('#c6c3ba', 9), tile: 4, baseboard: '#4b5158', wainscot: { color: '#e9e2d3', height: 0.9 }, ceiling: LOFT },
+  pantry: { floor: () => checkerTile('#f4f1e8', '#262a30'), tile: 1.2, baseboard: '#262a30', wainscot: { color: shiny('#f7f5ee'), height: 1.2 }, ceiling: LOFT },
+  print: { floor: () => concrete('#bfc1c2', 14), tile: 4, baseboard: '#4b5158', ceiling: LOFT },
   restroom: { floor: () => ceramic('#d5ecef', '#8fb7bd', 4), tile: 1.2, baseboard: '#6fa3aa', wainscot: { color: shiny('#bfe3e6'), height: 1.8 } },
   lobby: { floor: () => terrazzo('#f2ede3'), tile: 3, baseboard: '#374151' },
-  terrace: { floor: () => deck('#b98556'), tile: 1.5, baseboard: '#000000' },
-  home: { floor: () => wood('#c9a36b', '#7a5a34'), tile: 1.6, baseboard: '#8a6a4a', ceiling: { color: PLASTER, cornice: true } },
+  terrace: { floor: () => ceramic('#b9b6ad', '#8c8981', 3), tile: 1.8, baseboard: '#000000' },
+  home: { floor: () => wornWood('#a06f42', '#4a2f18'), tile: 1.3, baseboard: '#5b3d26', ceiling: { color: PLASTER, cornice: true } },
   street: { floor: () => ceramic('#c3c7cc', '#9aa0a6', 4), tile: 2.4, baseboard: '#000000' },
   subway: { floor: () => terrazzo('#9a9da1'), tile: 3, baseboard: '#3f4348', ceiling: { color: '#3d4046' } },
-  warehouse: { floor: () => terrazzo('#aeb4ba'), tile: 4, baseboard: '#facc15' },
+  plaza: { floor: () => ceramic('#c9ccd1', '#9aa0a6', 4), tile: 3, baseboard: '#000000' },
+  train: { floor: () => terrazzo('#4a4e55'), tile: 2, baseboard: '#2b2e33', ceiling: { color: '#e8eaec' } },
+  warehouse: { floor: () => concrete('#a19e96', 31), tile: 4, baseboard: '#77746d', ceiling: TIMBER },
+  // Places added by the commute work: neutral finishes until they get their own art pass.
+  towerLobby: { floor: () => terrazzo('#e7e2d6'), tile: 3, baseboard: '#374151' },
+  lift: { floor: () => terrazzo('#4b5563'), tile: 2, baseboard: '#1f2937', ceiling: { color: '#e8eaec' } },
+  van: { floor: () => terrazzo('#374151'), tile: 2, baseboard: '#1f2937', ceiling: { color: '#d9dde2' } },
 };
 
-interface Win {
-  readonly axis: 'x' | 'z';
-  readonly at: number;
-  readonly from: number;
-  readonly to: number;
-  readonly sill?: number;
-  readonly head?: number;
-  readonly blind?: boolean;
-}
-
-const win = (axis: 'x' | 'z', at: number, from: number, to: number, extra: Partial<Win> = {}): Win => ({ axis, at, from, to, ...extra });
+const win = (axis: Axis, at: number, from: number, to: number, extra: Partial<Win> = {}): Win => ({ axis, at, from, to, ...extra });
 const FROSTED = { sill: 1.9, head: 2.5 };
+const SASH = { sash: true };
 
 const WINDOWS: readonly Win[] = [
   win('z', 0, 1.5, 4.5), win('z', 0, 6, 9, { blind: true }), win('z', 0, 10.5, 13.5), win('z', 0, 15, 18, { blind: true }),
@@ -64,65 +77,40 @@ const WINDOWS: readonly Win[] = [
   win('z', 28, 27, 29.8), win('z', 28, 37, 39.4),
   win('x', 40, 1.5, 5), win('x', 40, 10.8, 13.4),
   // the flat: one window for the bunk room, one over the sofa
-  win('x', 0, 601.7, 603.7), win('x', 0, 606.6, 609.4),
+  win('x', 0, 601.7, 603.7, SASH), win('x', 0, 606.6, 609.4, SASH),
 ];
 
-/** A box running along a wall line: `a..b` along the line, centred on `at`. */
-function along(axis: 'x' | 'z', at: number, a: number, b: number, y0: number, y1: number, thickness: number, p: Paint, offset = 0): THREE.Mesh {
-  const length = b - a;
-  const mid = (a + b) / 2;
-  const height = y1 - y0;
-  return axis === 'z'
-    ? box(length, height, thickness, p, mid, y0 + height / 2, at + offset)
-    : box(thickness, height, length, p, at + offset, y0 + height / 2, mid);
-}
+const WAREHOUSE = areaById('warehouse');
+const HOME = areaById('home');
+/** Loading docks at both ends of every forklift lane. */
+const DOCKS: readonly Win[] = LANES.filter((l) => l.area === 'warehouse').flatMap((l) =>
+  [WAREHOUSE.x0, WAREHOUSE.x1].map((x) => win('x', x, l.z - DOCK_WIDTH / 2, l.z + DOCK_WIDTH / 2)),
+);
+const isDock = (o: Win): boolean => DOCKS.includes(o);
 
-/** +1 when the room interior is on the positive side of an outer wall. */
-const inward = (at: number): number => (at < 20 ? 1 : -1);
-
-function windowUnit(w: Win): THREE.Object3D[] {
-  const sill = w.sill ?? 0.9;
-  const head = w.head ?? 2.5;
-  const inside = inward(w.at);
-  const panes = Math.max(1, Math.round((w.to - w.from) / 1.2));
-  const step = (w.to - w.from) / panes;
-  const mullions = Array.from({ length: panes - 1 }, (_, i) => along(w.axis, w.at, w.from + step * (i + 1) - 0.025, w.from + step * (i + 1) + 0.025, sill, head, 0.08, shiny(FRAME)));
-  const frosted = w.sill !== undefined;
-  return [
-    along(w.axis, w.at, w.from, w.to, 0, sill, WALL_T, WALL),
-    along(w.axis, w.at, w.from, w.to, head, WALL_HEIGHT, WALL_T, WALL),
-    along(w.axis, w.at, w.from, w.to, sill, sill + 0.06, 0.24, shiny(FRAME)),
-    along(w.axis, w.at, w.from, w.to, head - 0.06, head, 0.24, shiny(FRAME)),
-    along(w.axis, w.at, w.from, w.from + 0.06, sill, head, 0.24, shiny(FRAME)),
-    along(w.axis, w.at, w.to - 0.06, w.to, sill, head, 0.24, shiny(FRAME)),
-    ...mullions,
-    along(w.axis, w.at, w.from + 0.06, w.to - 0.06, sill + 0.06, head - 0.06, 0.02, frosted ? glass('#ffffff', 0.7) : glass()),
-    along(w.axis, w.at, w.from - 0.06, w.to + 0.06, sill - 0.04, sill, 0.22, '#e7e2d6', inside * 0.2),
-    ...(w.blind ? [along(w.axis, w.at, w.from + 0.08, w.to - 0.08, head - 0.5, head - 0.04, 0.025, '#e5e0d2', inside * 0.08), along(w.axis, w.at, w.from + 0.08, w.to - 0.08, head - 0.54, head - 0.5, 0.04, shiny(FRAME), inside * 0.08)] : []),
-  ];
-}
-
-function railing(axis: 'x' | 'z', at: number, a: number, b: number): THREE.Object3D[] {
-  const posts = Math.max(2, Math.round((b - a) / 2) + 1);
-  const step = (b - a) / (posts - 1);
-  return [
-    along(axis, at, a, b, 0, 0.14, 0.24, '#8b929a'),
-    along(axis, at, a, b, 0.2, 1.02, 0.02, glass('#bfe6f5', 0.3)),
-    along(axis, at, a, b, 1.04, 1.1, 0.09, shiny('#4b5563')),
-    ...Array.from({ length: posts }, (_, i) => along(axis, at, a + i * step - 0.03, a + i * step + 0.03, 0.14, 1.05, 0.06, shiny('#4b5563'))),
-  ];
+/** What an outer wall is built of: brick shells for the warehouse, the flat's window walls and the tower's gable ends. */
+function finishOf(axis: Axis, at: number, a: number): Paint {
+  const x = axis === 'x' ? at : a;
+  const z = axis === 'z' ? at : a;
+  if (x >= WAREHOUSE.x0 && x <= WAREHOUSE.x1 && z >= WAREHOUSE.z0) return masonry('redBrick');
+  if (z >= HOME.z0 && x <= HOME.x1) return (axis === 'x' && at === HOME.x0) || (axis === 'z' && at === HOME.z0) ? masonry('redBrick') : WALL;
+  if (z <= 28 && axis === 'x' && (at === 0 || at === 40)) return masonry('brownBrick');
+  return WALL;
 }
 
 function walls(): THREE.Object3D[] {
+  const door = new THREE.MeshLambertMaterial({ map: rollerSlats('#7b828a') });
+  door.userData = { merge: true, noShadow: false, tiled: true };
   return WALLS.filter((w) => !w.hidden).flatMap((w) => {
-    const axis: 'x' | 'z' = w.x1 - w.x0 > w.z1 - w.z0 ? 'z' : 'x';
+    const axis: Axis = w.x1 - w.x0 > w.z1 - w.z0 ? 'z' : 'x';
     const at = axis === 'z' ? (w.z0 + w.z1) / 2 : (w.x0 + w.x1) / 2;
     const [a, b] = axis === 'z' ? [w.x0, w.x1] : [w.z0, w.z1];
-    if (w.low) return railing(axis, at, a, b);
-    const cuts = WINDOWS.filter((o) => o.axis === axis && Math.abs(o.at - at) < 0.01 && o.from >= a && o.to <= b).sort((p, q) => p.from - q.from);
+    if (w.low) return parapet(axis, at, a, b);
+    const finish = finishOf(axis, at, a);
+    const cuts = [...WINDOWS, ...DOCKS].filter((o) => o.axis === axis && Math.abs(o.at - at) < 0.01 && o.from >= a && o.to <= b).sort((p, q) => p.from - q.from);
     const edges = [a, ...cuts.flatMap((o) => [o.from, o.to]), b];
-    const solid = edges.flatMap((start, i) => (i % 2 === 0 && edges[i + 1] > start ? [along(axis, at, start, edges[i + 1], 0, WALL_HEIGHT, WALL_T, WALL)] : []));
-    return [...solid, ...cuts.flatMap(windowUnit)];
+    const solid = edges.flatMap((start, i) => (i % 2 === 0 && edges[i + 1] > start ? [along(axis, at, start, edges[i + 1], 0, WALL_HEIGHT, WALL_T, finish)] : []));
+    return [...solid, ...cuts.flatMap((o) => (isDock(o) ? dockUnit(o, finish, door) : windowUnit(o, finish)))];
   });
 }
 
@@ -143,8 +131,13 @@ function perimeter(room: Room, y0: number, y1: number, thickness: number, p: Pai
   });
 }
 
-function plainCeiling(room: Room, color: string): THREE.Mesh {
-  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(room.x1 - room.x0, room.z1 - room.z0), new THREE.MeshLambertMaterial({ color }));
+function plainCeiling(room: Room, spec: CeilingSpec): THREE.Mesh {
+  const w = room.x1 - room.x0;
+  const d = room.z1 - room.z0;
+  const map = spec.map?.();
+  map?.repeat.set(w / (spec.tile ?? 1), d / (spec.tile ?? 1));
+  const material = map ? new THREE.MeshBasicMaterial({ map }) : new THREE.MeshLambertMaterial({ color: spec.color });
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(w, d), material);
   ceiling.rotation.x = Math.PI / 2;
   ceiling.position.set((room.x0 + room.x1) / 2, WALL_HEIGHT - 0.02, (room.z0 + room.z1) / 2);
   return ceiling;
@@ -163,11 +156,23 @@ function roomSurfaces(room: Room): THREE.Object3D[] {
   floor.position.set(cx, 0, cz);
   floor.receiveShadow = true;
   if (room.outdoor) return [floor];
+  const wainscot = surface.wainscot
+    ? [...perimeter(room, 0.1, surface.wainscot.height, 0.012, surface.wainscot.color), ...perimeter(room, surface.wainscot.height, surface.wainscot.height + 0.04, 0.03, WAINSCOT_TRIM[room.id] ?? TRIM)]
+    : [];
+  const skirting = [...perimeter(room, 0, 0.1, 0.025, surface.baseboard), ...wainscot];
   if (surface.ceiling) {
     const cornice = surface.ceiling.cornice ? perimeter(room, WALL_HEIGHT - 0.12, WALL_HEIGHT - 0.02, 0.05, CORNICE) : [];
-    return [floor, plainCeiling(room, surface.ceiling.color), ...cornice, ...perimeter(room, 0, 0.1, 0.025, surface.baseboard)];
+    return [floor, plainCeiling(room, surface.ceiling), ...cornice, ...skirting];
   }
+  return [floor, ...gridCeiling(room), ...skirting];
+}
 
+/** Suspended tile ceiling with recessed light panels, a vent and a sprinkler head. */
+function gridCeiling(room: Room): THREE.Object3D[] {
+  const w = room.x1 - room.x0;
+  const d = room.z1 - room.z0;
+  const cx = (room.x0 + room.x1) / 2;
+  const cz = (room.z0 + room.z1) / 2;
   const ceilingMap = ceilingGrid();
   ceilingMap.repeat.set(w / CEILING_PANEL, d / CEILING_PANEL);
   const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({ map: ceilingMap }));
@@ -182,10 +187,7 @@ function roomSurfaces(room: Room): THREE.Object3D[] {
   }
   const vent = [box(0.6, 0.02, 0.6, shiny('#d4d4d8'), room.x0 + 1.5, WALL_HEIGHT - 0.028, room.z1 - 1.5), ...[-0.2, -0.07, 0.07, 0.2].map((o) => box(0.5, 0.012, 0.04, '#71717a', room.x0 + 1.5, WALL_HEIGHT - 0.042, room.z1 - 1.5 + o))];
   const sprinkler = cyl(0.03, 0.05, 0.05, shiny('#b91c1c'), cx + 0.7, WALL_HEIGHT - 0.045, cz + 0.9, 10);
-  const wainscot = surface.wainscot
-    ? [...perimeter(room, 0.1, surface.wainscot.height, 0.012, surface.wainscot.color), ...perimeter(room, surface.wainscot.height, surface.wainscot.height + 0.04, 0.03, room.id === 'corridor' ? BRAND : TRIM)]
-    : [];
-  return [floor, ceiling, ...lights, ...vent, sprinkler, ...perimeter(room, 0, 0.1, 0.025, surface.baseboard), ...wainscot];
+  return [ceiling, ...lights, ...vent, sprinkler];
 }
 
 const SIGN: TextStyle = { bg: '#1f2937', fg: '#ffffff' };
@@ -203,7 +205,7 @@ function doorway(door: Door): THREE.Object3D[] {
   const glazed = door.room === 'lobby' || door.room === 'terrace';
   const trim = glazed ? shiny(FRAME) : TRIM;
   const frame = [
-    along(door.axis, door.at, door.from, door.to, DOOR_TOP, WALL_HEIGHT, WALL_T, WALL),
+    along(door.axis, door.at, door.from, door.to, DOOR_TOP, WALL_HEIGHT, WALL_T, finishOf(door.axis, door.at, door.from)),
     along(door.axis, door.at, door.from - 0.07, door.from + 0.03, 0, DOOR_TOP + 0.07, 0.26, trim),
     along(door.axis, door.at, door.to - 0.03, door.to + 0.07, 0, DOOR_TOP + 0.07, 0.26, trim),
     along(door.axis, door.at, door.from, door.to, DOOR_TOP - 0.03, DOOR_TOP + 0.07, 0.26, trim),

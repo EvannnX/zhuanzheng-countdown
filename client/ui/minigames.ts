@@ -14,7 +14,10 @@ interface GameDef<S> {
 }
 
 const GIVE_UP = 'Backspace';
-const TICK_MS = 100;
+const TICK_MS = 40;
+const TIMING_SPEED = 0.9;
+const TIMING_HALF_ZONE = 0.09;
+const TIMING_HITS = 3;
 const KEY_LETTERS = 'ASDFJKL';
 const KEY_COUNT = 8;
 const INVOICE_COUNT = 6;
@@ -117,7 +120,7 @@ const recipeGame: GameDef<{ order: number[]; stage: number }> = {
 
 const mashGame: GameDef<{ hits: number }> = {
   title: '修打印机',
-  hint: '狂按 E 拍打打印机侧面！',
+  hint: '狂按 E！',
   seconds: 5,
   init: () => ({ hits: 0 }),
   render: (s) => [fillBar('meter', s.hits / MASH_TARGET), h('div', 'mg-foot', `${s.hits} / ${MASH_TARGET}`)],
@@ -127,7 +130,60 @@ const mashGame: GameDef<{ hits: number }> = {
   },
 };
 
+const pingPong = (t: number): number => {
+  const phase = (t * TIMING_SPEED) % 2;
+  return phase < 1 ? phase : 2 - phase;
+};
+
+const timingGame: GameDef<{ zone: number; hits: number }> = {
+  title: '看准时机',
+  hint: '滑块进入绿色区域时按 E，连续命中 3 次。按偏了从头再来',
+  seconds: 14,
+  init: () => ({ zone: 0.2 + Math.random() * 0.6, hits: 0 }),
+  render: (s, elapsed) => {
+    const zone = h('i', 'zone');
+    zone.style.left = `${(s.zone - TIMING_HALF_ZONE) * 100}%`;
+    zone.style.width = `${TIMING_HALF_ZONE * 200}%`;
+    const marker = h('i', 'marker');
+    marker.style.left = `${pingPong(elapsed) * 100}%`;
+    return [h('div', 'track', zone, marker), h('div', 'mg-foot', `${s.hits} / ${TIMING_HITS}`)];
+  },
+  onKey: (s, code, elapsed) => {
+    if (code !== 'KeyE') return s;
+    if (Math.abs(pingPong(elapsed) - s.zone) > TIMING_HALF_ZONE) return { ...s, hits: 0 };
+    return s.hits + 1 >= TIMING_HITS ? 'win' : { zone: 0.2 + Math.random() * 0.6, hits: s.hits + 1 };
+  },
+};
+
+const TURNS = [
+  { arrow: '←', text: '左转', keys: ['KeyA', 'ArrowLeft'] },
+  { arrow: '↑', text: '直行', keys: ['KeyW', 'ArrowUp'] },
+  { arrow: '→', text: '右转', keys: ['KeyD', 'ArrowRight'] },
+] as const;
+const TURN_KEYS: readonly string[] = TURNS.flatMap((t) => t.keys);
+const DRIVE_TURNS = 6;
+
+/** The away-day shuttle: follow the client's sat-nav; one wrong turn and the whole van takes the scenic route. */
+const driveGame: GameDef<{ route: number[]; done: number }> = {
+  title: '开外派班车',
+  hint: '跟着导航按 A / W / D（或方向键）。按错一次 = 走错路，全车一起绕',
+  seconds: 9,
+  init: () => ({ route: Array.from({ length: DRIVE_TURNS }, () => Math.floor(Math.random() * TURNS.length)), done: 0 }),
+  render: (s) => [
+    h('div', 'quote', `导航：前方路口 ${TURNS[s.route[s.done]].arrow} ${TURNS[s.route[s.done]].text}`),
+    h('div', 'mg-row', ...s.route.map((turn, i) => h('span', `keycap${i < s.done ? ' ok' : i === s.done ? ' next' : ''}`, TURNS[turn].arrow))),
+    h('div', 'mg-foot', `${s.done} / ${DRIVE_TURNS} 个路口`),
+  ],
+  onKey: (s, code) => {
+    if (!TURN_KEYS.includes(code)) return s;
+    if (!(TURNS[s.route[s.done]].keys as readonly string[]).includes(code)) return 'lose';
+    return s.done + 1 >= s.route.length ? 'win' : { ...s, done: s.done + 1 };
+  },
+};
+
 const GAMES: Record<GameKind, GameDef<never>> = {
+  drive: driveGame as unknown as GameDef<never>,
+  timing: timingGame as unknown as GameDef<never>,
   keys: keysGame as unknown as GameDef<never>,
   order: orderGame as unknown as GameDef<never>,
   quiz: quizGame as unknown as GameDef<never>,
@@ -137,7 +193,8 @@ const GAMES: Record<GameKind, GameDef<never>> = {
 
 export interface Minigames {
   isOpen(): boolean;
-  open(kind: GameKind, onDone: (ok: boolean) => void): void;
+  /** `title` names the job being done; it defaults to the game's own name. */
+  open(kind: GameKind, onDone: (ok: boolean) => void, title?: string): void;
   key(code: string): void;
   /** Close without reporting (the server already ended it). */
   abort(): void;
@@ -145,7 +202,7 @@ export interface Minigames {
 
 export function createMinigames(): Minigames {
   const root = byId('mg');
-  let session: { def: GameDef<unknown>; state: unknown; startedAt: number; timer: number; onDone: (ok: boolean) => void } | null = null;
+  let session: { title: string; def: GameDef<unknown>; state: unknown; startedAt: number; timer: number; onDone: (ok: boolean) => void } | null = null;
 
   const elapsed = (): number => (session ? (performance.now() - session.startedAt) / 1000 : 0);
 
@@ -166,7 +223,7 @@ export function createMinigames(): Minigames {
     const left = Math.max(0, session.def.seconds - elapsed());
     const bar = fillBar('timer', left / session.def.seconds);
     setChildren(root, [
-      h('h2', '', session.def.title),
+      h('h2', '', session.title),
       h('p', 'mg-hint', session.def.hint),
       ...session.def.render(session.state, elapsed()),
       bar,
@@ -176,14 +233,14 @@ export function createMinigames(): Minigames {
 
   return {
     isOpen: () => session !== null,
-    open(kind, onDone) {
+    open(kind, onDone, title) {
       close();
       const def = GAMES[kind] as unknown as GameDef<unknown>;
       const timer = window.setInterval(() => {
         if (session && elapsed() >= session.def.seconds) finish(false);
         else render();
       }, TICK_MS);
-      session = { def, state: def.init(), startedAt: performance.now(), timer, onDone };
+      session = { title: title ?? def.title, def, state: def.init(), startedAt: performance.now(), timer, onDone };
       root.hidden = false;
       render();
     },

@@ -1,7 +1,7 @@
-import type { StationType } from './world.ts';
+import type { NpcId, StationType } from './world.ts';
 
 export type ItemKind = 'doc' | 'coffee' | 'parcel' | 'milktea' | 'snack';
-export type GameKind = 'keys' | 'order' | 'quiz' | 'recipe' | 'mash';
+export type GameKind = 'keys' | 'order' | 'quiz' | 'recipe' | 'mash' | 'timing' | 'drive';
 
 export type Site = 'office' | 'warehouse';
 
@@ -19,6 +19,10 @@ export interface StepDef {
   readonly seconds?: number;
   readonly game?: GameKind;
   readonly gives?: ItemKind;
+  /** How many interns must hold together; the owner waits until helpers join. */
+  readonly crew?: number;
+  /** Done face to face with this colleague, wherever they happen to be, instead of at the station. */
+  readonly npc?: NpcId;
   readonly text: string;
   readonly verb: string;
 }
@@ -32,94 +36,151 @@ export interface TaskDef {
   readonly dests?: readonly string[];
   /** Where this job exists. Defaults to the office. */
   readonly site?: Site;
+  /** First day this kind of work is handed out. Defaults to day 1. */
+  readonly minDay?: number;
 }
 
-export const TASKS: readonly TaskDef[] = [
+const hold = (station: StationType, seconds: number, verb: string, text: string, extra: Partial<StepDef> = {}): StepDef => ({ station, kind: 'hold', seconds, verb, text, ...extra });
+const play = (station: StationType, game: GameKind, verb: string, text: string, extra: Partial<StepDef> = {}): StepDef => ({ station, kind: 'minigame', game, verb, text, ...extra });
+
+const OFFICE_TASKS: readonly TaskDef[] = [
   {
     id: 'print',
-    title: '打印季度报告',
-    kpi: 16,
-    steps: [{ station: 'printer', kind: 'hold', seconds: 3, gives: 'doc', text: '去打印室打印报告', verb: '打印报告' }],
-    dests: ['bossdesk', 'whiteboard'],
+    title: '季度报告',
+    kpi: 22,
+    steps: [
+      play('desk', 'keys', '写报告初稿', '回自己工位写初稿'),
+      hold('printer', 3, '打印报告', '去打印室把报告打出来', { gives: 'doc' }),
+      play('bossdesk', 'timing', '请王总监签字', '找到王总监本人（他在到处巡视），当面递上去签字', { npc: 'boss' }),
+    ],
+    dests: ['bossdesk'],
   },
   {
     id: 'coffee',
     title: '给总监冲咖啡',
-    kpi: 14,
-    steps: [{ station: 'coffee', kind: 'minigame', game: 'recipe', gives: 'coffee', text: '去茶水间冲咖啡', verb: '冲咖啡' }],
+    kpi: 18,
+    steps: [hold('snack', 1.5, '拿咖啡豆', '去茶水间零食柜拿咖啡豆'), play('coffee', 'recipe', '冲咖啡', '到咖啡机按总监的口味冲一杯', { gives: 'coffee' })],
     dests: ['bossdesk'],
   },
   {
     id: 'weekly',
     title: '写周报',
-    kpi: 13,
-    steps: [{ station: 'desk', kind: 'minigame', game: 'keys', text: '回自己工位写周报', verb: '写周报' }],
-  },
-  {
-    id: 'invoice',
-    title: '贴发票',
-    kpi: 12,
-    steps: [{ station: 'invoice', kind: 'minigame', game: 'order', text: '去打印室贴发票', verb: '贴发票' }],
-  },
-  {
-    id: 'minutes',
-    title: '整理会议纪要',
-    kpi: 14,
-    steps: [{ station: 'whiteboard', kind: 'minigame', game: 'quiz', text: '去会议室白板整理纪要', verb: '整理会议纪要' }],
+    kpi: 16,
+    steps: [play('desk', 'keys', '写周报', '回自己工位写周报'), hold('server', 2.5, '上传内网', '去打印室的机房把周报传上内网')],
   },
   {
     id: 'parcel',
     title: '代取快递',
-    kpi: 11,
-    steps: [{ station: 'locker', kind: 'hold', seconds: 2, gives: 'parcel', text: '去前台外卖柜取快递', verb: '取快递' }],
-    dests: ['bossdesk', 'zhang', 'whiteboard'],
+    kpi: 14,
+    steps: [hold('locker', 2, '取快递', '去前台外卖柜取快递', { gives: 'parcel' }), hold('invoice', 2, '登记签收', '拿到打印室的登记桌签收')],
+    dests: ['bossdesk', 'zhang'],
+  },
+  {
+    id: 'invoice',
+    title: '报销单',
+    kpi: 22,
+    minDay: 2,
+    steps: [
+      hold('locker', 2, '取发票信封', '去前台外卖柜取发票信封', { gives: 'doc' }),
+      play('invoice', 'order', '贴发票', '到打印室把发票按金额贴好'),
+      play('bossdesk', 'timing', '请王总监签字', '找到王总监本人，当面签字', { npc: 'boss' }),
+    ],
+    dests: ['zhang'],
+  },
+  {
+    id: 'paper',
+    title: '合抬打印纸',
+    kpi: 24,
+    minDay: 2,
+    steps: [hold('locker', 4, '合抬打印纸', '前台到了一整箱打印纸，要两个人一起抬', { gives: 'parcel', crew: 2 })],
+    dests: ['printer'],
+  },
+  {
+    id: 'minutes',
+    title: '会议纪要',
+    kpi: 22,
+    minDay: 3,
+    steps: [
+      play('whiteboard', 'quiz', '听会', '去会议室听领导讲话，听懂潜台词'),
+      play('desk', 'keys', '整理纪要', '回工位把纪要敲出来'),
+      hold('printer', 3, '打印纪要', '去打印室打印', { gives: 'doc' }),
+    ],
+    dests: ['bossdesk'],
   },
   {
     id: 'milktea',
     title: '帮总监拿奶茶',
-    kpi: 12,
-    steps: [{ station: 'locker', kind: 'hold', seconds: 2, gives: 'milktea', text: '去前台外卖柜拿奶茶', verb: '拿奶茶' }],
+    kpi: 16,
+    minDay: 3,
+    steps: [hold('locker', 2, '拿奶茶', '去前台外卖柜拿奶茶', { gives: 'milktea' }), hold('coffee', 2, '加冰', '总监要去冰变少冰：去茶水间加冰')],
     dests: ['bossdesk'],
   },
-  // ---- 外派：物流仓库 ----
+  {
+    id: 'deploy',
+    title: '版本上线',
+    kpi: 30,
+    minDay: 5,
+    steps: [
+      play('desk', 'keys', '改最后一个 bug', '回工位改最后一个 bug'),
+      play('server', 'mash', '重启服务', '去机房重启服务（狂按 E）'),
+      play('whiteboard', 'quiz', '上线汇报', '去会议室做上线汇报'),
+      play('bossdesk', 'timing', '请王总监验收', '找到王总监本人验收签字', { npc: 'boss' }),
+    ],
+  },
+];
+
+const WAREHOUSE_TASKS: readonly TaskDef[] = [
   {
     id: 'sort',
     title: '分拣包裹',
-    kpi: 8,
-    site: 'warehouse',
-    steps: [{ station: 'conveyor', kind: 'hold', seconds: 1.2, gives: 'parcel', text: '去传送带取包裹（小心叉车）', verb: '取包裹' }],
+    kpi: 13,
+    steps: [hold('conveyor', 1.2, '取包裹', '去传送带取包裹（小心叉车）', { gives: 'parcel' }), play('labelDesk', 'timing', '扫码', '到打单台对准条码扫一下')],
     dests: ['bayA', 'bayB', 'bayC'],
   },
   {
     id: 'label',
     title: '贴面单',
-    kpi: 11,
-    site: 'warehouse',
-    steps: [{ station: 'labelDesk', kind: 'minigame', game: 'order', text: '去打单台按重量排面单', verb: '贴面单' }],
+    kpi: 16,
+    steps: [play('stockPc', 'keys', '导出订单', '去盘点电脑导出今天的订单'), play('labelDesk', 'order', '贴面单', '到打单台按重量排面单')],
   },
   {
     id: 'stock',
     title: '盘点库存',
-    kpi: 12,
-    site: 'warehouse',
-    steps: [{ station: 'stockPc', kind: 'minigame', game: 'keys', text: '去盘点电脑录入库存', verb: '盘点库存' }],
-  },
-  {
-    id: 'tea',
-    title: '给甲方倒茶',
-    kpi: 10,
-    site: 'warehouse',
-    steps: [{ station: 'waterBar', kind: 'hold', seconds: 2, gives: 'coffee', text: '去饮水机接一杯茶', verb: '接茶' }],
-    dests: ['client'],
+    kpi: 16,
+    steps: [hold('boxpile', 2.5, '清点纸箱', '去西墙边的纸箱堆（📦 标记）把库存数一遍'), play('stockPc', 'keys', '录入库存', '到盘点电脑录入数字')],
   },
   {
     id: 'brief',
-    title: '听甲方提需求',
-    kpi: 13,
-    site: 'warehouse',
-    steps: [{ station: 'client', kind: 'minigame', game: 'quiz', text: '去找甲方王总听需求', verb: '听甲方提需求' }],
+    title: '伺候甲方',
+    kpi: 20,
+    steps: [
+      hold('waterBar', 2, '接茶', '去饮水机给甲方接一杯茶', { gives: 'coffee' }),
+      play('client', 'quiz', '听甲方提需求', '端过去，顺便听王总提需求'),
+      play('stockPc', 'keys', '录入需求', '到盘点电脑把需求录进系统'),
+    ],
+  },
+  {
+    id: 'heavy',
+    title: '合抬大件',
+    kpi: 24,
+    steps: [hold('boxpile', 4, '合抬大件', '西墙边的纸箱堆（📦 标记）有一件大货，要两个人一起抬', { gives: 'parcel', crew: 2 })],
+    dests: ['bayA', 'bayB', 'bayC'],
+  },
+  {
+    id: 'rush',
+    title: '甲方加急单',
+    kpi: 28,
+    minDay: 4,
+    steps: [
+      play('client', 'quiz', '确认加急单', '去找王总确认加急单'),
+      hold('conveyor', 1.5, '截下包裹', '去传送带把那件包裹截下来', { gives: 'parcel' }),
+      play('labelDesk', 'timing', '重打面单', '到打单台重打面单'),
+    ],
+    dests: ['bayA', 'bayB', 'bayC'],
   },
 ];
+
+export const TASKS: readonly TaskDef[] = [...OFFICE_TASKS, ...WAREHOUSE_TASKS.map((t) => ({ ...t, site: 'warehouse' as const }))];
 
 export const taskDef = (id: string): TaskDef | undefined => TASKS.find((t) => t.id === id);
 

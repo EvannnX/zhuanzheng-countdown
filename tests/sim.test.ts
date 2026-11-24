@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { DAY_SECONDS, EVENT_SECONDS, MAX_WARNINGS, SUMMARY_SECONDS, TASK_SLOTS, TOTAL_DAYS } from '../shared/constants.ts';
+import { ASSIST_REWARD, DAY_KPI_TARGET, DAY_SECONDS, EVENT_SECONDS, INTRO_SECONDS, MAX_WARNINGS, OKR_PENALTY, OKR_REWARD, SEAT_ENERGY, STALL_STORY_SECONDS, SUMMARY_SECONDS, TASK_SLOTS, TOTAL_DAYS } from '../shared/constants.ts';
 import { STATIONS, stationById } from '../shared/world.ts';
 import { getPrompts } from '../server/sim/prompts.ts';
 import { buildSnapshots } from '../server/sim/snapshot.ts';
 import { arrive } from '../server/sim/commute.ts';
 import { settleRanking } from '../server/sim/rivalry.ts';
+import { countTowardsGoal, settleGoal } from '../server/sim/teamwork.ts';
 import { addPlayer, createGame, patchPlayer } from '../server/sim/state.ts';
 import type { GameState, Npc } from '../server/sim/state.ts';
 import { applyCommand, ranking, step } from '../server/sim/step.ts';
@@ -13,7 +14,7 @@ const DT = 0.05;
 
 function startedGame(names: string[] = ['甲', '乙']): GameState {
   const lobby = names.reduce((s, name, i) => addPlayer(s, `p${i + 1}`, name), createGame('1234', 7));
-  const morning = applyCommand(lobby, 'p1', { t: 'start' });
+  const morning = applyCommand({ ...lobby, introShown: true }, 'p1', { t: 'start' });
   // Skip the commute: everyone clocks in, then scores and events are cleared so tests control them.
   const atWork = Object.keys(morning.players).reduce((s, id) => arrive(s, id), morning);
   const clean = Object.keys(atWork.players).reduce((s, id) => patchPlayer(s, id, { kpi: 0, energy: 70 }), atWork);
@@ -44,10 +45,23 @@ describe('game flow', () => {
   test('only the host can start, and starting hands every player a full task list', () => {
     const lobby = addPlayer(addPlayer(createGame('1234', 1), 'p1', '甲'), 'p2', '乙');
     expect(applyCommand(lobby, 'p2', { t: 'start' }).phase).toBe('lobby');
-    const s = applyCommand(lobby, 'p1', { t: 'start' });
+    const film = applyCommand(lobby, 'p1', { t: 'start' });
+    expect(film.phase).toBe('intro');
+    expect(film.players.p2.stage).not.toBe('home');
+    const s = run(film, INTRO_SECONDS + 1);
     expect(s.phase).toBe('day');
+    expect(s.day).toBe(1);
     expect(s.players.p2.stage).toBe('home');
     expect(arrive(s, 'p2').players.p2.tasks).toHaveLength(TASK_SLOTS);
+  });
+
+  test('the opening film plays once per room, and the ranking tracks KPI earned today', () => {
+    const lobby = addPlayer(addPlayer(createGame('1234', 1), 'p1', '甲'), 'p2', '乙');
+    const film = applyCommand(lobby, 'p1', { t: 'start' });
+    const again = applyCommand({ ...film, phase: 'lobby' }, 'p1', { t: 'start' });
+    expect(again.phase).toBe('day');
+    const earned = patchPlayer(again, 'p2', { kpi: 25, dayStartKpi: 10 });
+    expect(ranking(earned)[0]).toMatchObject({ id: 'p2', kpi: 25, today: 15 });
   });
 
   test('days roll into a summary and the last day ends in the final ranking', () => {
@@ -78,25 +92,39 @@ describe('game flow', () => {
 });
 
 describe('tasks', () => {
-  test('fetching a parcel and delivering it pays KPI and refills the task list', () => {
+  /** Fetch the parcel, sign it in at the print room: now it can be delivered. */
+  const parcelReady = (s0: GameState): GameState => {
+    let s = run(applyCommand(at(s0, 'p1', 'locker'), 'p1', { t: 'act', act: 'work', target: 'locker' }), 2.2);
+    s = run(applyCommand(at(s, 'p1', 'invoice'), 'p1', { t: 'act', act: 'work', target: 'invoice' }), 2.2);
+    return s;
+  };
+
+  test('a job runs through its stages before the delivery pays and refills the list', () => {
     let s = parkNpcs(withTask(startedGame(), 'p1', 'parcel', 'bossdesk'));
-    s = applyCommand(at(s, 'p1', 'locker'), 'p1', { t: 'act', act: 'work', target: 'locker' });
-    s = run(s, 2.2);
+    s = run(applyCommand(at(s, 'p1', 'locker'), 'p1', { t: 'act', act: 'work', target: 'locker' }), 2.2);
     expect(s.players.p1.carrying?.kind).toBe('parcel');
+    // Not signed in yet: the director will not take it.
+    expect(getPrompts(at(s, 'p1', 'bossdesk'), at(s, 'p1', 'bossdesk').players.p1).some((q) => q.act === 'deliver')).toBe(false);
+
+    s = run(applyCommand(at(s, 'p1', 'invoice'), 'p1', { t: 'act', act: 'work', target: 'invoice' }), 2.2);
     s = applyCommand(at(s, 'p1', 'bossdesk'), 'p1', { t: 'act', act: 'deliver', target: 'bossdesk' });
-    expect(s.players.p1.kpi).toBe(11);
+
+    expect(s.players.p1.kpi).toBe(14);
     expect(s.players.p1.carrying).toBeNull();
     expect(s.players.p1.tasks.some((t) => t.uid === 'tx')).toBe(false);
+    expect(s.okr.done).toBe(1);
   });
 
-  test('a minigame task only pays when the minigame is won', () => {
+  test('a minigame stage only advances when the minigame is won', () => {
     let s = parkNpcs(withTask(startedGame(), 'p1', 'weekly', null));
     s = applyCommand(s, 'p1', { t: 'act', act: 'work', target: 'desk0' });
     expect(s.players.p1.busy?.kind).toBe('minigame');
     const lost = applyCommand(run(s, 2), 'p1', { t: 'mg', ok: false });
-    expect(lost.players.p1.kpi).toBe(0);
-    const won = applyCommand(run(s, 2), 'p1', { t: 'mg', ok: true });
-    expect(won.players.p1.kpi).toBe(13);
+    expect(lost.players.p1.tasks[0].step).toBe(0);
+    let won = applyCommand(run(s, 2), 'p1', { t: 'mg', ok: true });
+    expect(won.players.p1.tasks[0].step).toBe(1);
+    won = run(applyCommand(at(won, 'p1', 'server'), 'p1', { t: 'act', act: 'work', target: 'server' }), 2.8);
+    expect(won.players.p1.kpi).toBe(16);
   });
 
   test('acts that are not on offer are ignored', () => {
@@ -105,8 +133,7 @@ describe('tasks', () => {
   });
 
   test('stealing moves the item, resets the victim task, and the thief gets the KPI', () => {
-    let s = parkNpcs(withTask(startedGame(), 'p1', 'parcel', 'bossdesk'));
-    s = run(applyCommand(at(s, 'p1', 'locker'), 'p1', { t: 'act', act: 'work', target: 'locker' }), 2.2);
+    let s = parcelReady(parkNpcs(withTask(startedGame(), 'p1', 'parcel', 'bossdesk')));
     const victim = s.players.p1;
     s = patchPlayer(s, 'p2', { x: victim.x - 1, z: victim.z, yaw: Math.PI / 2 });
     expect(getPrompts(s, s.players.p2).some((p) => p.act === 'steal')).toBe(true);
@@ -114,8 +141,108 @@ describe('tasks', () => {
     expect(s.players.p2.carrying?.kind).toBe('parcel');
     expect(s.players.p1.tasks[0].step).toBe(0);
     s = applyCommand(at(s, 'p2', 'bossdesk'), 'p2', { t: 'act', act: 'deliver', target: 'bossdesk' });
-    expect(s.players.p2.kpi).toBe(11);
+    expect(s.players.p2.kpi).toBe(14);
     expect(s.players.p1.kpi).toBe(0);
+  });
+});
+
+describe('commute and monitors', () => {
+  test('a seat on the train restores energy and can only hold one rider', () => {
+    let s = applyCommand({ ...addPlayer(addPlayer(createGame('1234', 3), 'p1', '甲'), 'p2', '乙'), introShown: true }, 'p1', { t: 'start' });
+    for (const id of ['p1', 'p2']) s = patchPlayer(at(s, id, 'seat0'), id, { stage: 'train', cohort: 'train:0', rideEndsAt: s.time + 10, seat: null, energy: 40 });
+    s = applyCommand(s, 'p1', { t: 'act', act: 'seat', target: 'seat0' });
+    expect(s.players.p1.energy).toBe(40 + SEAT_ENERGY);
+    expect(getPrompts(s, s.players.p2).find((q) => q.act === 'seat')?.disabled).toBe(true);
+  });
+
+  test('a sacked intern starts the next day at work and can write up a slacker', () => {
+    let s = parkNpcs(patchPlayer(startedGame(), 'p2', { fired: true }));
+    s = run(applyCommand(s, 'p1', { t: 'act', act: 'phone', target: '' }), 0.3);
+    const p1 = s.players.p1;
+    s = patchPlayer(s, 'p2', { x: p1.x - 1, z: p1.z, yaw: Math.PI / 2 });
+    s = applyCommand(s, 'p2', { t: 'act', act: 'catch', target: 'p1' });
+    expect(s.players.p1.warnings).toBe(1);
+  });
+});
+
+describe('face to face and restroom', () => {
+  test('a signature is only on offer next to the director himself, not at his desk', () => {
+    const base = parkNpcs(patchPlayer(startedGame(), 'p1', { tasks: [{ uid: 'tx', defId: 'print', step: 2, dest: 'bossdesk' }] }));
+    const atDesk = at(base, 'p1', 'bossdesk');
+    expect(getPrompts(atDesk, atDesk.players.p1).some((q) => q.act === 'work')).toBe(false);
+
+    const boss = base.npcs.find((n) => n.id === 'boss');
+    const beside = patchPlayer(base, 'p1', { x: (boss?.x ?? 0) - 1, z: boss?.z ?? 0 });
+    const offer = getPrompts(beside, beside.players.p1).find((q) => q.act === 'work');
+    expect(offer?.target).toBe('npc:boss');
+
+    const signing = applyCommand(beside, 'p1', { t: 'act', act: 'work', target: 'npc:boss' });
+    const signed = applyCommand(run(signing, 2), 'p1', { t: 'mg', ok: true });
+    expect(signed.players.p1.tasks[0].step).toBe(3);
+  });
+
+  test('hiding in a stall long enough tells one story a day', () => {
+    let s = parkNpcs(startedGame());
+    s = run(applyCommand(at(s, 'p1', 'stall0'), 'p1', { t: 'act', act: 'stall', target: 'stall0' }), STALL_STORY_SECONDS + 0.5);
+    expect(s.players.p1.stallStoryDay).toBe(s.day);
+    expect(s.outbox.filter((o) => o.to === 'p1').length).toBeGreaterThan(0);
+  });
+});
+
+describe('day length', () => {
+  test('the day ends as soon as somebody earns the daily KPI target', () => {
+    const s = parkNpcs(startedGame());
+    const ended = run(patchPlayer(s, 'p1', { kpi: s.players.p1.dayStartKpi + DAY_KPI_TARGET }), 0.2);
+    expect(ended.phase).toBe('summary');
+  });
+});
+
+describe('teamwork', () => {
+  const lifting = (): GameState => {
+    const s = parkNpcs(withTask(startedGame(), 'p1', 'paper', 'printer'));
+    return applyCommand(at(s, 'p1', 'locker'), 'p1', { t: 'act', act: 'work', target: 'locker' });
+  };
+
+  test('a two-person lift waits until a colleague lends a hand', () => {
+    const alone = run(lifting(), 6);
+
+    expect(alone.players.p1.carrying).toBeNull();
+    expect(alone.players.p1.busy?.kind).toBe('hold');
+  });
+
+  test('helping finishes the lift and pays the helper', () => {
+    let s = run(lifting(), 1);
+    s = at(s, 'p2', 'locker');
+    expect(getPrompts(s, s.players.p2).some((q) => q.act === 'assist')).toBe(true);
+
+    s = run(applyCommand(s, 'p2', { t: 'act', act: 'assist', target: 'locker' }), 4.4);
+
+    expect(s.players.p1.carrying?.kind).toBe('parcel');
+    expect(s.players.p2.busy).toBeNull();
+    expect(s.players.p2.kpi).toBe(ASSIST_REWARD);
+  });
+
+  test('a helper is let go when the lifter walks away', () => {
+    let s = run(applyCommand(at(run(lifting(), 1), 'p2', 'locker'), 'p2', { t: 'act', act: 'assist', target: 'locker' }), 0.5);
+    s = run(applyCommand(s, 'p1', { t: 'cancel' }), 0.2);
+    expect(s.players.p2.busy).toBeNull();
+  });
+
+  test('reaching the department goal pays everyone, missing it docks everyone', () => {
+    const base = startedGame();
+    const nearly = { ...base, okr: { done: base.okr.goal - 1, goal: base.okr.goal } };
+    const reached = countTowardsGoal(nearly);
+    expect(reached.players.p1.kpi).toBe(OKR_REWARD);
+    expect(reached.players.p2.kpi).toBe(OKR_REWARD);
+
+    const missed = settleGoal(patchPlayer(patchPlayer(nearly, 'p1', { kpi: 20 }), 'p2', { kpi: 20 }));
+    expect(missed.players.p1.kpi).toBe(20 - OKR_PENALTY);
+  });
+
+  test('new kinds of work unlock as the days go by', () => {
+    const day1 = startedGame();
+    const offered = new Set(Object.values(day1.players).flatMap((p) => p.tasks.map((t) => t.defId)));
+    expect([...offered].some((id) => ['invoice', 'minutes', 'deploy', 'paper'].includes(id))).toBe(false);
   });
 });
 
@@ -200,7 +327,7 @@ describe('events', () => {
 describe('morning rush', () => {
   const morning = (names: string[] = ['甲', '乙']): GameState => {
     const lobby = names.reduce((s, name, i) => addPlayer(s, `p${i + 1}`, name), createGame('1234', 7));
-    return { ...applyCommand(lobby, 'p1', { t: 'start' }), eventQueue: [] };
+    return { ...applyCommand({ ...lobby, introShown: true }, 'p1', { t: 'start' }), eventQueue: [] };
   };
 
   test('only one flatmate can use a wash stand at a time', () => {
@@ -226,15 +353,17 @@ describe('morning rush', () => {
     expect(s.players.p1.stage).toBe('subway');
     s = at({ ...s, time: 16 * 100 + 4 }, 'p1', 'traindoor0');
     s = applyCommand(patchPlayer(s, 'p1', { kpi: 20 }), 'p1', { t: 'act', act: 'board', target: 'traindoor0' });
+    expect(s.players.p1.stage).toBe('train');
+    s = arrive(s, 'p1');
     expect(s.players.p1.stage).toBe('work');
     expect(s.players.p1.tasks).toHaveLength(TASK_SLOTS);
     expect(s.players.p1.kpi).toBeLessThan(20);
   });
 
-  test('a full train makes the next intern wait', () => {
+  test('boarding does not shut the doors on the next intern', () => {
     let s = at(at({ ...morning(), time: 16 * 100 + 4 }, 'p1', 'traindoor0'), 'p2', 'traindoor0');
     s = applyCommand(s, 'p1', { t: 'act', act: 'board', target: 'traindoor0' });
-    expect(getPrompts(s, s.players.p2).find((p) => p.act === 'board')?.disabled).toBe(true);
+    expect(getPrompts(s, s.players.p2).find((p) => p.act === 'board')?.disabled).toBe(false);
   });
 
   test('standing in traffic knocks you back to the kerb', () => {

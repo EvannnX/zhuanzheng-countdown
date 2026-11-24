@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
-import { MAX_PLAYERS, SNAPSHOT_EVERY_TICKS, TICK_MS } from '../shared/constants.ts';
+import { MAX_PLAYERS, RECONNECT_GRACE_MS, SNAPSHOT_EVERY_TICKS, TICK_MS } from '../shared/constants.ts';
 import type { ClientMsg, Command, ServerMsg } from '../shared/protocol.ts';
 import { buildSnapshots } from './sim/snapshot.ts';
 import { addPlayer, createGame, removePlayer } from './sim/state.ts';
@@ -15,6 +16,10 @@ interface Room {
   readonly sockets: ReadonlyMap<string, WebSocket>;
   readonly ticks: number;
   readonly lastTickAt: number;
+  /** Secret per player, needed to take the seat back after a dropped connection. */
+  readonly keys: ReadonlyMap<string, string>;
+  /** Players whose socket dropped, and when. */
+  readonly gone: ReadonlyMap<string, number>;
 }
 
 export interface Session {
@@ -63,7 +68,12 @@ export function createRoomManager() {
       try {
         const dt = Math.min(MAX_DT_SECONDS, (now - room.lastTickAt) / 1000);
         const ticks = room.ticks + 1;
-        const next = flush({ ...room, state: step(room.state, dt), ticks, lastTickAt: now });
+        const alive = expire(code, room, now);
+        if (!alive) {
+          rooms.delete(code);
+          continue;
+        }
+        const next = flush({ ...alive, state: step(alive.state, dt), ticks, lastTickAt: now });
         rooms.set(code, next);
         if (ticks % SNAPSHOT_EVERY_TICKS === 0) broadcast(next);
       } catch (err) {
@@ -73,7 +83,35 @@ export function createRoomManager() {
   };
   const timer = setInterval(tick, TICK_MS);
 
-  const enter = (socket: WebSocket, msg: Extract<ClientMsg, { t: 'create' | 'join' }>): Session | null => {
+  /** Drop players whose grace period ran out; close rooms nobody is coming back to. */
+  const expire = (code: string, room: Room, now: number): Room | null => {
+    const lost = [...room.gone].filter(([, at]) => now - at > RECONNECT_GRACE_MS).map(([id]) => id);
+    if (lost.length === 0) return room;
+    const gone = new Map([...room.gone].filter(([id]) => !lost.includes(id)));
+    const state = lost.reduce((s, id) => removePlayer(s, id), room.state);
+    if (room.sockets.size === 0 && gone.size === 0) {
+      console.log(`[room ${code}] closed`);
+      return null;
+    }
+    return { ...room, gone, state };
+  };
+
+  const rejoin = (socket: WebSocket, msg: Extract<ClientMsg, { t: 'rejoin' }>): Session | null => {
+    const room = rooms.get(msg.code);
+    if (!room || room.keys.get(msg.id) !== msg.key || !room.state.players[msg.id]) {
+      send(socket, { t: 'error', text: '这一局已经结束或你的位置已被收回，请重新加入' });
+      return null;
+    }
+    room.sockets.get(msg.id)?.close();
+    const gone = new Map([...room.gone].filter(([id]) => id !== msg.id));
+    rooms.set(msg.code, { ...room, gone, sockets: new Map([...room.sockets, [msg.id, socket]]) });
+    send(socket, { t: 'joined', id: msg.id, code: msg.code, key: msg.key });
+    console.log(`[room ${msg.code}] ${msg.id} reconnected`);
+    return { playerId: msg.id, code: msg.code };
+  };
+
+  const enter = (socket: WebSocket, msg: Extract<ClientMsg, { t: 'create' | 'join' | 'rejoin' }>): Session | null => {
+    if (msg.t === 'rejoin') return rejoin(socket, msg);
     const code = msg.t === 'join' ? msg.code : newCode();
     if (msg.t === 'create' && (code === null || rooms.size >= MAX_ROOMS)) {
       send(socket, { t: 'error', text: '服务器房间已满，请稍后再试' });
@@ -94,11 +132,14 @@ export function createRoomManager() {
       sockets: new Map(),
       ticks: 0,
       lastTickAt: Date.now(),
+      keys: new Map(),
+      gone: new Map(),
     };
     const playerId = `p${nextPlayer++}`;
     const state = onJoin(addPlayer(room.state, playerId, msg.name), playerId);
-    rooms.set(roomCode, { ...room, state, sockets: new Map([...room.sockets, [playerId, socket]]) });
-    send(socket, { t: 'joined', id: playerId, code: roomCode });
+    const key = randomUUID();
+    rooms.set(roomCode, { ...room, state, sockets: new Map([...room.sockets, [playerId, socket]]), keys: new Map([...room.keys, [playerId, key]]) });
+    send(socket, { t: 'joined', id: playerId, code: roomCode, key });
     console.log(`[room ${roomCode}] ${msg.name} joined as ${playerId}`);
     return { playerId, code: roomCode };
   };
@@ -113,16 +154,14 @@ export function createRoomManager() {
     }
   };
 
-  const leave = (session: Session): void => {
+  /** A closed socket only vacates the seat; the player is removed when the grace period runs out. */
+  const leave = (session: Session, socket: WebSocket): void => {
     const room = rooms.get(session.code);
-    if (!room) return;
+    // A newer socket may already have taken the seat back.
+    if (!room || room.sockets.get(session.playerId) !== socket) return;
     const sockets = new Map([...room.sockets].filter(([id]) => id !== session.playerId));
-    if (sockets.size === 0) {
-      rooms.delete(session.code);
-      console.log(`[room ${session.code}] closed`);
-      return;
-    }
-    rooms.set(session.code, { ...room, sockets, state: removePlayer(room.state, session.playerId) });
+    rooms.set(session.code, { ...room, sockets, gone: new Map([...room.gone, [session.playerId, Date.now()]]) });
+    console.log(`[room ${session.code}] ${session.playerId} dropped, holding the seat`);
   };
 
   return { enter, command, leave, stop: () => clearInterval(timer), roomCount: () => rooms.size };

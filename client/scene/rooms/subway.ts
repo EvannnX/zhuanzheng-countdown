@@ -5,6 +5,7 @@ import { ball, box, cyl, glass, glow, group, rbox, shiny, textPlane, turn } from
 import { DARK, STEEL, at, bin } from '../parts.ts';
 import { hang, poster } from '../shell.ts';
 import { ceramic } from '../textures.ts';
+import { tunnelRun } from './tunnel.ts';
 import type { Builder, RoomArt } from './types.ts';
 
 const IRON = '#1f5c4a';
@@ -194,19 +195,10 @@ function ceilingWorks(): THREE.Object3D[] {
 function trackBed(): THREE.Object3D[] {
   const rat = at(211.4, 606.9, 0.6, rbox(0.2, 0.09, 0.09, '#57534e', 0, 0.09, 0, 0.04), ball(0.04, '#57534e', 0.12, 0.1, 0), cyl(0.008, 0.004, 0.2, '#a8a29e', -0.2, 0.06, 0, 5).rotateZ(Math.PI / 2), turn(cyl(0.12, 0.12, 0.012, '#f59e0b', 0.24, 0.06, 0.02, 3), 0.4));
   return [
-    box(LENGTH, 0.02, PLATFORM.z1 - PLATFORM.edge, '#141517', MID_X, 0.012, (PLATFORM.edge + PLATFORM.z1) / 2),
     box(LENGTH, 0.03, 0.34, '#050506', MID_X, 0.02, PLATFORM.edge + 0.17),
-    ...Array.from({ length: 40 }, (_, i) => box(0.22, 0.05, 2.3, '#3b2f25', 200.4 + i * 0.7, 0.035, 607.9)),
-    ...[607.15, 608.65].map((z) => box(LENGTH, 0.1, 0.07, shiny('#8d949b'), MID_X, 0.09, z)),
-    box(LENGTH, 0.1, 0.16, '#d9d9d4', MID_X, 0.2, 609.3),
-    ...Array.from({ length: 10 }, (_, i) => box(0.1, 0.2, 0.2, '#2a2a2c', 201 + i * 2.9, 0.1, 609.3)),
-    // far tunnel wall, columns between the tracks, signal lights, the mouths of the tunnel
-    box(LENGTH, WALL_HEIGHT, 0.1, '#0d0e10', MID_X, WALL_HEIGHT / 2, 609.85),
-    ...Array.from({ length: 14 }, (_, i) => [box(0.16, WALL_HEIGHT, 0.04, '#22262a', 201 + i * 2, WALL_HEIGHT / 2, 609.62), box(0.04, WALL_HEIGHT, 0.16, '#22262a', 201 + i * 2, WALL_HEIGHT / 2, 609.7)]).flat(),
+    // the track itself, the far wall and the tunnel either side come from tunnelRun()
     ...[204, 216].map((x) => ball(0.06, glow('#3b82f6'), x, 1.6, 609.76)),
     ball(0.06, glow('#ef4444'), 226, 2.1, 609.76),
-    box(0.12, WALL_HEIGHT, 3.8, '#000000', PLATFORM.x0 + 0.16, WALL_HEIGHT / 2, 608),
-    box(0.12, WALL_HEIGHT, 3.8, '#000000', PLATFORM.x1 - 0.16, WALL_HEIGHT / 2, 608),
     box(1.2, 0.006, 0.8, shiny('#1f2937'), 219, 0.025, 606.8),
     rat,
   ];
@@ -252,6 +244,7 @@ function signage(): THREE.Object3D[] {
     ...ad('租房找我\n押一付三\n离地铁\n步行 40 分钟', 214, '#dc2626', '#fff7d6'),
     ...ad('周末施工\n本线不停\n本站\n班照上', 222, '#fde047', '#111111'),
     ...poster('看到摸鱼 立刻举报\nIf you see something, say something', 2.6, 0.5, { bg: '#111214', fg: '#fbbf24' }, 'e', PLATFORM.x1, 603, 1.6),
+    ...poster('禁止进入隧道\nDO NOT ENTER', 0.9, 0.4, { bg: '#b91c1c', fg: '#ffffff' }, 'e', PLATFORM.x1, 605.2, 1.9),
   ];
 }
 
@@ -259,6 +252,7 @@ function subwayDecor(): THREE.Object3D[] {
   return [
     ...tiledWalls(),
     ...ceilingWorks(),
+    tunnelRun(),
     ...trackBed(),
     ...platformEdge(),
     ...signage(),

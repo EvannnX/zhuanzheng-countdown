@@ -1,15 +1,18 @@
 import * as THREE from 'three';
 import { HOME_DOORWAYS, WALL_HEIGHT } from '../../../shared/world.ts';
-import { towerGeometry } from '../exterior.ts';
 import { ball, box, cyl, glow, group, rbox, shiny, textPlane, turn } from '../kit.ts';
 import { BRAND, DARK, STEEL, WHITE, WOOD, at, bin, noticeBoard, pictureFrame, rug, wallClock } from '../parts.ts';
 import { WALL, hang, poster } from '../shell.ts';
-import { ceramic, facade } from '../textures.ts';
+import { ceramic } from '../textures.ts';
+import { homeNyc } from './homeNyc.ts';
+import { homeOutside } from './homeOutside.ts';
 
 const TRIM = '#8a6a4a';
 const DOOR_TOP = 2.1;
 const INNER_WALL_T = 0.16;
 const TILE = '#e3f1f2';
+const BRASS = '#b8902f';
+const DOOR_PAINT = '#1f3a2f';
 const CURTAIN_X = 0.21;
 const BATH = { x0: 13.08, x1: 15.9, z0: 600.1, z1: 606.52 };
 
@@ -51,36 +54,23 @@ function curtains(from: number, to: number, color: string): THREE.Object3D[] {
   ];
 }
 
+/** Schoolhouse pendant on a brass stem under a plaster ceiling rose. */
 function pendant(lamp: HomeLamp): THREE.Group {
-  return group(lamp.x, 0, lamp.z, cyl(0.05, 0.05, 0.02, WHITE, 0, WALL_HEIGHT - 0.03, 0, 12), cyl(0.008, 0.008, 0.5, DARK, 0, WALL_HEIGHT - 0.27, 0, 6), cyl(0.1, 0.24, 0.2, '#f5e6c8', 0, HOME_LAMP_Y + 0.12, 0, 18), ball(0.06, glow('#fff3c4'), 0, HOME_LAMP_Y + 0.06, 0));
-}
-
-/** What you see through the windows: a lawn, a hedge, trees and the next blocks. */
-function outside(): THREE.Object3D[] {
-  const material = new THREE.MeshLambertMaterial({ map: facade('#d9cfc0', '#6b8fa8', 57) });
-  const block = (x: number, z: number, w: number, h: number, d: number): THREE.Mesh => {
-    const m = new THREE.Mesh(towerGeometry(w, h, d), material);
-    m.position.set(x, h / 2, z);
-    return m;
-  };
-  const tree = (x: number, z: number, s: number): THREE.Group => group(x, 0, z, cyl(0.1 * s, 0.14 * s, 2 * s, '#7c5a3c', 0, s, 0, 8), ball(1.1 * s, '#3f9a55', 0, 2.7 * s, 0), ball(0.8 * s, '#4fae66', 0.5 * s, 2.3 * s, 0.3 * s));
-  return [
-    box(70, 0.1, 70, '#8fae7a', -35.2, -0.06, 606),
-    box(1.6, 0.02, 70, '#c9c4b7', -6, 0, 606),
-    rbox(0.8, 0.7, 13, '#3f8a4f', -2.6, 0.35, 606, 0.2),
-    tree(-9, 611.5, 1.2),
-    tree(-11, 599, 1),
-    tree(-4.2, 613.2, 0.8),
-    block(-30, 596, 14, 8, 20),
-    block(-28, 624, 16, 18, 18),
-    block(-52, 606, 14, 10, 30),
-  ];
+  return group(
+    lamp.x, 0, lamp.z,
+    cyl(0.24, 0.26, 0.025, '#fbf8f1', 0, WALL_HEIGHT - 0.034, 0, 20),
+    cyl(0.12, 0.16, 0.03, '#fbf8f1', 0, WALL_HEIGHT - 0.06, 0, 16),
+    cyl(0.05, 0.06, 0.05, shiny(BRASS), 0, WALL_HEIGHT - 0.095, 0, 12),
+    cyl(0.01, 0.01, 0.4, shiny(BRASS), 0, WALL_HEIGHT - 0.31, 0, 6),
+    cyl(0.07, 0.09, 0.07, shiny(BRASS), 0, HOME_LAMP_Y + 0.2, 0, 12),
+    ball(0.15, glow('#fff0c9'), 0, HOME_LAMP_Y + 0.06, 0),
+  );
 }
 
 function bedroom(): THREE.Object3D[] {
   return [
     ...curtains(601.7, 603.7, '#fda4af'),
-    at(6.4, 602.9, 0, rug(3.4, 1.3, '#fde68a', '#f59e0b')),
+    at(6.4, 602.9, 0, rug(3.4, 1.3, '#b08968', '#6b3f2a')),
     ...[1.9, 5.1, 8.3, 11.5].map((x, i) => at(x, 601.62, 0.2 * (i % 2 ? 1 : -1), rbox(0.09, 0.035, 0.22, '#fda4af', 0, 0.018, 0, 0.015), rbox(0.09, 0.035, 0.22, '#fda4af', 0.13, 0.018, 0.04, 0.015))),
     ...poster('今天也要\n努力搬砖', 1.2, 0.74, { bg: '#1e3a8a', fg: '#ffffff' }, 's', 604.6, 10.9, 1.9),
     ...poster('转正倒计时\n还有 5 天', 0.9, 0.6, { bg: '#fff7e6', fg: '#c2410c', border: BRAND }, 's', 604.6, 0.7, 1.7),
@@ -118,7 +108,21 @@ function washNook(): THREE.Object3D[] {
 }
 
 function living(): THREE.Object3D[] {
-  const frontDoor = hang(group(0, 0, 0, rbox(1.1, 2.1, 0.06, '#7c5a3c', 0, 1.05, 0.03, 0.012), ...[0.55, 1.45].map((y) => box(0.8, 0.6, 0.012, '#6b4a30', 0, y, 0.062)), ball(0.04, shiny('#facc15'), 0.42, 1, 0.09), box(0.08, 2.14, 0.1, '#5a3519', -0.59, 1.07, 0.03), box(0.08, 2.14, 0.1, '#5a3519', 0.59, 1.07, 0.03), box(1.26, 0.08, 0.1, '#5a3519', 0, 2.18, 0.03)), 's', 612, 6, 0, 0.1);
+  const frontDoor = hang(
+    group(
+      0, 0, 0,
+      rbox(1.1, 2.1, 0.06, DOOR_PAINT, 0, 1.05, 0.03, 0.012),
+      ...[0.5, 1.2, 1.78].map((y, i) => box(0.8, i === 2 ? 0.36 : 0.52, 0.012, '#27473b', 0, y, 0.062)),
+      ball(0.04, shiny(BRASS), 0.42, 1, 0.09),
+      ...[1.16, 1.34].map((y) => cyl(0.035, 0.035, 0.02, shiny(BRASS), 0.42, y, 0.07, 10).rotateX(Math.PI / 2)),
+      cyl(0.016, 0.016, 0.014, shiny(BRASS), 0, 1.55, 0.066, 8).rotateX(Math.PI / 2),
+      box(0.16, 0.012, 0.012, shiny(BRASS), 0.38, 1.5, 0.07),
+      box(0.3, 0.04, 0.012, shiny(BRASS), 0, 0.92, 0.066),
+      ...[-0.59, 0.59].map((x) => box(0.1, 2.16, 0.1, '#efe9dc', x, 1.08, 0.03)),
+      box(1.3, 0.1, 0.1, '#efe9dc', 0, 2.2, 0.03),
+    ),
+    's', 612, 6, 0, 0.1,
+  );
   const hooks = hang(group(0, 0, 0, box(1.1, 0.06, 0.03, WOOD), rbox(0.36, 0.6, 0.1, '#1f2937', -0.32, -0.34, 0.07, 0.04), rbox(0.34, 0.5, 0.08, '#b45309', 0.08, -0.3, 0.06, 0.04), rbox(0.2, 0.3, 0.1, '#f472b6', 0.42, -0.2, 0.07, 0.04)), 's', 612, 4.3, 1.75, 0.11);
   return [
     ...curtains(606.6, 609.4, '#bfdbfe'),
@@ -126,13 +130,11 @@ function living(): THREE.Object3D[] {
     hooks,
     hang(textPlane('出口 ▼', 0.8, 0.26, { bg: '#16a34a', fg: '#ffffff' }), 's', 612, 6, 2.72),
     hang(wallClock(), 's', 612, 7.2, 2.3, 0.1),
-    at(2.5, 608, 0, rug(3, 3.2, '#93c5fd', '#3b82f6')),
+    at(2.5, 608, 0, rug(3, 3.2, '#8c2f2a', '#d8c08a'), box(2.2, 0.004, 2.4, '#a8443a', 0, 0.026, 0), box(1.2, 0.004, 1.4, '#d8c08a', 0, 0.032, 0), box(0.9, 0.004, 1.1, '#2f4858', 0, 0.038, 0)),
     at(6, 611.25, 0, rbox(0.9, 0.02, 0.55, '#7c2d12', 0, 0.012, 0, 0.008)),
     at(5.35, 611.5, 0, cyl(0.12, 0.1, 0.45, shiny('#374151'), 0, 0.225, 0, 12), turn(cyl(0.012, 0.012, 0.8, '#dc2626', 0.02, 0.5, 0, 6), 0, 0, 0.1)),
     ...poster('本周值日表\n倒垃圾：还没人认领', 1.5, 0.8, { bg: '#ffffff', fg: '#1f2937', border: '#9ca3af' }, 'n', 604.6, 5.2, 1.7),
-    // split air conditioner
-    hang(group(0, 0, 0, rbox(0.95, 0.3, 0.2, WHITE, 0, 0, 0.1, 0.04), box(0.8, 0.02, 0.03, '#cbd5e1', 0, -0.13, 0.19), box(0.04, 0.012, 0.004, glow('#22c55e'), 0.38, 0.06, 0.201)), 'n', 604.6, 10.6, 2.5, 0.08),
-    hang(noticeBoard(1.1, 0.75, 21), 'n', 604.6, 10.6, 1.6, 0.09),
+    hang(noticeBoard(1.1, 0.75, 21), 'n', 604.6, 9.85, 1.6, 0.09),
     hang(pictureFrame(0.7, 0.5, '#fde68a'), 'w', 0, 610.5, 1.75, 0.1),
     // yoga mat and dumbbells that have not moved in weeks
     at(6.2, 609.3, 0.15, box(0.62, 0.012, 1.7, '#a78bfa', 0, 0.007, 0)),
@@ -151,5 +153,5 @@ function kitchenCorner(): THREE.Object3D[] {
 }
 
 export function homeDecor(): THREE.Object3D[] {
-  return [...Object.values(HOME_DOORWAYS).flatMap(doorway), ...HOME_LAMPS.map(pendant), ...outside(), ...bedroom(), ...washNook(), ...living(), ...kitchenCorner()];
+  return [...Object.values(HOME_DOORWAYS).flatMap(doorway), ...HOME_LAMPS.map(pendant), ...homeOutside(), ...homeNyc(), ...bedroom(), ...washNook(), ...living(), ...kitchenCorner()];
 }

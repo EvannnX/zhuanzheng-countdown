@@ -7,25 +7,77 @@ import type { Builder, RoomArt } from './types.ts';
 const BODY = '#e5e7eb';
 const BINDER = ['#1d4ed8', '#b91c1c', '#15803d', '#a16207', '#111827', '#f8fafc'];
 
-/** Multi-function printer; `tall` adds a finisher tower for the copier. */
-function machine(w: number, d: number, tall: boolean): THREE.Object3D[] {
-  const bw = w * 0.92;
-  const bd = d * 0.82;
-  const top = tall ? 1.14 : 0.98;
+const PAPER_OUT_Y = 0.74;
+const SCANNER_Y = 0.98;
+
+/** Paper drawers on castors: the bottom half of the machine. */
+function drawerBase(bw: number, bd: number, x: number): THREE.Object3D[] {
+  const front = bd / 2;
   return [
-    rbox(bw, 0.64, bd, BODY, 0, 0.36, 0, 0.02),
-    ...[0.16, 0.36, 0.56].map((y) => box(bw - 0.08, 0.17, 0.012, '#f3f4f6', 0, y, bd / 2 + 0.002)),
-    ...[0.16, 0.36, 0.56].map((y) => box(0.2, 0.02, 0.025, shiny('#6b7280'), 0, y + 0.03, bd / 2 + 0.014)),
-    box(bw, 0.04, bd, '#4b5563', 0, 0.02, 0),
-    rbox(bw, top - 0.68, bd, '#d1d5db', 0, 0.68 + (top - 0.68) / 2, 0, 0.02),
-    box(bw * 0.7, 0.1, 0.3, '#374151', -bw * 0.1, 0.78, bd / 2 - 0.1),
-    box(bw * 0.62, 0.012, 0.34, WHITE, -bw * 0.1, 0.735, bd / 2 + 0.06),
-    group(-bw * 0.1, 0.742, bd / 2 + 0.06, papers(3, 6)),
-    rbox(bw, 0.07, bd, '#9ca3af', 0, top + 0.035, 0, 0.02),
-    rbox(bw * 0.6, 0.06, bd * 0.7, '#6b7280', -bw * 0.12, top + 0.1, 0, 0.02),
-    turn(group(bw / 2 - 0.16, top + 0.06, bd / 2 - 0.12, rbox(0.24, 0.02, 0.16, shiny(DARK), 0, 0.03, 0, 0.008), box(0.2, 0.004, 0.12, glow('#93c5fd'), 0, 0.042, 0)), 0, -0.5),
-    box(0.05, 0.02, 0.02, glow('#22c55e'), bw / 2 - 0.08, 0.9, bd / 2 + 0.004),
-    ...(tall ? [rbox(0.3, 0.9, bd * 0.8, '#d1d5db', bw / 2 + 0.12, 0.47, 0, 0.02), box(0.26, 0.012, bd * 0.6, WHITE, bw / 2 + 0.12, 0.6, 0.06)] : []),
+    ...[-1, 1].flatMap((sx) => [-1, 1].map((sz) => cyl(0.03, 0.03, 0.05, DARK, x + sx * (bw / 2 - 0.07), 0.03, sz * (bd / 2 - 0.07), 10))),
+    rbox(bw, 0.54, bd, BODY, x, 0.33, 0, 0.02),
+    ...[0.2, 0.46].flatMap((y, i) => [
+      box(bw - 0.06, 0.22, 0.012, '#f3f4f6', x, y, front + 0.002),
+      box(0.22, 0.03, 0.02, '#4b5563', x, y + 0.06, front + 0.006),
+      box(0.05, 0.06, 0.004, WHITE, x + bw / 2 - 0.09, y, front + 0.01),
+      box(0.012, 0.1 - i * 0.04, 0.004, glow('#60a5fa'), x + bw / 2 - 0.04, y, front + 0.01),
+    ]),
+  ];
+}
+
+/** Engine section with the open paper-exit bay, the scanner slab and the document feeder on top. */
+function engine(bw: number, bd: number, x: number): THREE.Object3D[] {
+  const front = bd / 2;
+  return [
+    rbox(bw, SCANNER_Y - 0.6, bd, '#d7dadd', x, (SCANNER_Y + 0.6) / 2, 0, 0.02),
+    box(bw * 0.72, 0.17, 0.3, '#22262c', x - bw * 0.08, PAPER_OUT_Y + 0.08, front - 0.14),
+    box(bw * 0.66, 0.012, 0.36, WHITE, x - bw * 0.08, PAPER_OUT_Y, front - 0.12),
+    group(x - bw * 0.08, PAPER_OUT_Y + 0.008, front - 0.14, papers(4, 6)),
+    box(bw - 0.04, 0.02, 0.012, '#1d4ed8', x, 0.62, front + 0.002),
+    rbox(bw + 0.02, 0.07, bd + 0.02, '#aeb3b9', x, SCANNER_Y + 0.035, 0, 0.02),
+    // document feeder: hinged lid, sloped input tray with a waiting stack, side guides
+    rbox(bw * 0.92, 0.09, bd * 0.86, '#c3c7cc', x, SCANNER_Y + 0.115, -0.02, 0.025),
+    turn(box(bw * 0.5, 0.012, bd * 0.5, '#e5e7eb', x - bw * 0.14, SCANNER_Y + 0.2, -0.02), 0, 0, 0.14),
+    turn(box(0.21, 0.01, 0.3, WHITE, x - bw * 0.14, SCANNER_Y + 0.212, -0.02), 0, 0, 0.14),
+    ...[-0.17, 0.17].map((z) => box(bw * 0.3, 0.03, 0.012, '#6b7280', x - bw * 0.14, SCANNER_Y + 0.215, -0.02 + z)),
+    rbox(bw * 0.24, 0.07, bd * 0.8, '#8f959b', x + bw * 0.32, SCANNER_Y + 0.19, -0.02, 0.02),
+  ];
+}
+
+/** Tilted touch panel with a keypad and the big green start key. */
+function controlPanel(): THREE.Group {
+  return turn(
+    group(
+      0, 0, 0,
+      rbox(0.3, 0.03, 0.2, shiny(DARK), 0, 0.015, 0, 0.008),
+      box(0.16, 0.004, 0.12, glow('#93c5fd'), -0.05, 0.032, 0),
+      ...[0, 1, 2].flatMap((r) => [0, 1].map((c) => box(0.022, 0.006, 0.022, '#9ca3af', 0.07 + c * 0.032, 0.033, -0.05 + r * 0.032))),
+      cyl(0.02, 0.02, 0.008, glow('#22c55e'), 0.1, 0.034, 0.065, 10),
+      cyl(0.012, 0.012, 0.008, shiny('#dc2626'), 0.06, 0.034, 0.065, 8),
+    ),
+    0, 0.5,
+  );
+}
+
+/** Floor-standing multi-function printer with a fold-out bypass tray; `tall` bolts a stapling finisher to its side instead. */
+function machine(w: number, d: number, tall: boolean): THREE.Object3D[] {
+  const bw = w * (tall ? 0.6 : 0.72);
+  const bd = d * 0.76;
+  const x = tall ? -w * 0.16 : 0.06;
+  const finisherX = x + bw / 2 + 0.17;
+  return [
+    ...drawerBase(bw, bd, x),
+    ...engine(bw, bd, x),
+    group(x + bw / 2 - 0.17, SCANNER_Y + 0.02, bd / 2 + 0.02, controlPanel()),
+    box(0.012, 0.3, bd * 0.56, '#c3c7cc', x - bw / 2 - 0.004, 0.62, 0),
+    ...(tall
+      ? [
+          rbox(0.3, 1, bd * 0.86, '#d1d5db', finisherX, 0.53, 0, 0.02),
+          ...[0.52, 0.8].map((y) => turn(box(0.24, 0.012, bd * 0.6, WHITE, finisherX + 0.06, y, 0), 0, 0, 0.18)),
+          box(0.2, 0.3, 0.012, '#aeb3b9', finisherX, 0.26, (bd * 0.86) / 2 + 0.002),
+          box(0.04, 0.016, 0.014, glow('#22c55e'), finisherX, 0.96, (bd * 0.86) / 2 + 0.004),
+        ]
+      : [box(0.05, 0.02, 0.014, glow('#22c55e'), x + bw / 2 - 0.08, 0.93, bd / 2 + 0.004), turn(box(0.2, 0.012, bd * 0.5, '#d1d5db', x - bw / 2 - 0.09, 0.7, 0), 0, 0, -0.35)]),
   ];
 }
 

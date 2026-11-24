@@ -1,4 +1,4 @@
-import { LANES, ROADS, vehiclesAt } from '../../shared/hazards.ts';
+import { AVENUE, LANES, ROADS, vehiclesAt } from '../../shared/hazards.ts';
 import type { Snapshot } from '../../shared/protocol.ts';
 import { AREAS, DOORS, ROOMS, areaAt, areaById, stationById } from '../../shared/world.ts';
 import type { Area } from '../../shared/world.ts';
@@ -56,9 +56,10 @@ export function createMinimap(): Minimap {
         ctx.fillStyle = 'rgba(17,24,39,0.7)';
         if (room.id !== 'corridor') ctx.fillText(SHORT_NAMES[room.id] ?? room.name, px((room.x0 + room.x1) / 2), pz((room.z0 + room.z1) / 2));
       }
-      if (area.id === 'street') {
+      const roads = area.id === 'street' ? ROADS : area.id === 'plaza' ? [AVENUE] : [];
+      if (roads.length > 0) {
         ctx.fillStyle = '#4b5563';
-        for (const road of ROADS) ctx.fillRect(px(area.x0), pz(road.z0), (area.x1 - area.x0) * scale, (road.z1 - road.z0) * scale);
+        for (const road of roads) ctx.fillRect(px(area.x0), pz(road.z0), (area.x1 - area.x0) * scale, (road.z1 - road.z0) * scale);
       }
       ctx.fillStyle = '#dc2626';
       for (const lane of LANES) {

@@ -3,15 +3,18 @@ import { ITEM_NAMES, TASKS, taskDef } from '../../shared/tasks.ts';
 import type { StepDef, TaskDef } from '../../shared/tasks.ts';
 import { stationById, stationOfType } from '../../shared/world.ts';
 import type { Station } from '../../shared/world.ts';
-import { ownDeskId, patchPlayer, roll } from './state.ts';
+import { activePlayers, ownDeskId, patchPlayer, roll } from './state.ts';
 import type { GameState, Player, TaskInstance } from './state.ts';
 
 export const currentStep = (task: TaskInstance): StepDef | null => taskDef(task.defId)?.steps[task.step] ?? null;
 
 /** The concrete station the task currently points at. */
+export const NPC_TARGET = 'npc:';
+
 export function taskTarget(p: Player, task: TaskInstance): string | null {
   const step = currentStep(task);
   if (!step) return task.dest;
+  if (step.npc) return null;
   if (step.station === 'desk') return ownDeskId(p);
   return stationOfType(step.station)?.id ?? null;
 }
@@ -30,7 +33,30 @@ export function workAt(p: Player, station: Station): { task: TaskInstance; def: 
   for (const task of p.tasks) {
     const def = taskDef(task.defId);
     const step = currentStep(task);
-    if (def && step && taskTarget(p, task) === station.id) return { task, def, step };
+    if (def && step && !step.npc && taskTarget(p, task) === station.id) return { task, def, step };
+  }
+  return null;
+}
+
+/** Finished and total stages of a task; the final delivery is a stage of its own. */
+export function taskProgress(task: TaskInstance): { step: number; steps: number } {
+  const def = taskDef(task.defId);
+  return { step: task.step, steps: (def?.steps.length ?? 0) + (def?.dests ? 1 : 0) };
+}
+
+/** Kinds of work handed out for the first time today. */
+export const newTaskTitles = (site: string, day: number): string[] => TASKS.filter((d) => (d.site ?? 'office') === site && d.minDay === day).map((d) => d.title);
+
+/** The job behind a work target: a station id, or `npc:<id>` for a face-to-face stage. */
+export function workOn(p: Player, target: string): { task: TaskInstance; def: TaskDef; step: StepDef } | null {
+  if (!target.startsWith(NPC_TARGET)) {
+    const st = stationById(target);
+    return st ? workAt(p, st) : null;
+  }
+  for (const task of p.tasks) {
+    const def = taskDef(task.defId);
+    const step = currentStep(task);
+    if (def && step?.npc && `${NPC_TARGET}${step.npc}` === target) return { task, def, step };
   }
   return null;
 }
@@ -38,7 +64,10 @@ export function workAt(p: Player, station: Station): { task: TaskInstance; def: 
 export function addTask(s: GameState, playerId: string): GameState {
   const p = s.players[playerId];
   if (!p || p.fired || p.tasks.length >= TASK_SLOTS) return s;
-  const fresh = TASKS.filter((d) => (d.site ?? 'office') === s.site && !p.tasks.some((t) => t.defId === d.id));
+  const crewAvailable = activePlayers(s).length > 1;
+  const fresh = TASKS.filter(
+    (d) => (d.site ?? 'office') === s.site && (d.minDay ?? 1) <= s.day && (crewAvailable || !d.steps.some((st) => (st.crew ?? 1) > 1)) && !p.tasks.some((t) => t.defId === d.id),
+  );
   if (fresh.length === 0) return s;
   const [pick, s1] = roll(s);
   const def = fresh[Math.floor(pick * fresh.length)];
